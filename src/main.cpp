@@ -1,15 +1,18 @@
+// main.cpp
 #include <Arduino.h>
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
 #include <ArduinoOTA.h>
 #include <EEPROM.h>
-#include "driver/twai.h"
-#include "device.h"
 #include "dashboard.h"
+#include "ODriveCAN.h"
+#include "CadenceSensor.h"
 
-// --- EEPROM SETTINGS ---
-#define EEPROM_SIZE 128
+ODriveCAN odrive(0);
+CadenceSensor cadenceSensor;
+
+#define EEPROM_SIZE 256
 constexpr int EEPROM_ADDRESS = 0;
 
 struct DeviceInfo {
@@ -19,201 +22,130 @@ struct DeviceInfo {
   bool SCAN_FOR_DEVICE;
   int brakingThreshold;
   int brakingTimeout;
+  char home_ssid[32];
+  char home_pass[64];
 };
 DeviceInfo deviceInfo;
+
+char log_buffer[1024] = "System Booting...\n";
+void addLog(const char* msg) {
+  Serial.println(msg);
+  int msg_len = strlen(msg);
+  int cur_len = strlen(log_buffer);
+  
+  if (cur_len + msg_len + 2 > sizeof(log_buffer)) {
+    int shift = (cur_len + msg_len + 2) - sizeof(log_buffer);
+    memmove(log_buffer, log_buffer + shift, cur_len - shift + 1);
+    cur_len -= shift;
+  }
+  strcat(log_buffer, msg);
+  strcat(log_buffer, "\n");
+}
 
 // --- HARDWARE PINS ---
 #define CAN_TX_PIN GPIO_NUM_17
 #define CAN_RX_PIN GPIO_NUM_16
-#define inductiveProbe GPIO_NUM_34
+// FIX: Moved from 34 (Input Only) to 25 so the internal pull-up works!
+#define inductiveProbe 25 
 
-// --- ODRIVE SETTINGS ---
-#define ODRIVE_NODE_ID 0
-#define CMD_SET_AXIS_STATE         0x07
-#define CMD_SET_CONTROLLER_MODE    0x0B
-#define CMD_SET_INPUT_VEL          0x0D
-#define CMD_GET_ENCODER_ESTIMATES  0x09
-#define CMD_GET_IQC                0x14
-
-float odrv_vel = 0.0;
-float odrv_current = 0.0;
-
-// --- E-BIKE STATE ---
-int cadence = 0;
 bool isBraking = false;
-int currentProbeAnalog = 0;
+float brake_avg = 1.0; 
+unsigned long brake_start_time = 0;
 
-// --- BLE STATE ---
-bool connected = false;
-static int prevCumulativeCrankRev = 0;
-static int prevCrankTime = 0;
-static double prevRPM = 0;
-static int prevCrankStaleness = 0;
-static int stalenessLimit = 2;
-BLEClient* client;
-BLEScan* scanner;
-BLERemoteCharacteristic* sensorCharacteristic;
+// --- OTA STATE & CALLBACKS ---
+bool isUpdating = false;
 
-// --- WIFI / HYBRID CONFIG ---
-const char *home_ssid = "TellMyWifiLoveHer";
-const char *home_pass = "stehtaufdemRouter.";
+void handleOTAStart() {
+  isUpdating = true;
+  odrive.setTorque(0.0); // Stop motor safely!
+  Serial.println("\nOTA Update Started! Freezing all other tasks...");
+}
+
+void handleOTAEnd() {
+  Serial.println("\nOTA Update Finished! Rebooting...");
+}
+
+void handleOTAError(ota_error_t error) {
+  Serial.printf("\nOTA Error[%u]! Rebooting to recover...\n", error);
+  ESP.restart(); // Force reboot to clear the frozen state!
+}
 
 const char *ap_ssid = "ESP-Cadence";
 const char *ap_pass = "12345678";
-
 bool isAPMode = false;
 const byte DNS_PORT = 53;
 IPAddress apIP(192, 168, 4, 1);
 DNSServer dnsServer;
 WebServer server(80);
 
+void updateBrakeLogic() {
+  int probe_state = (digitalRead(inductiveProbe) == HIGH) ? 1 : 0; 
+  float alpha = 0.15; 
+  brake_avg = (alpha * probe_state) + ((1.0 - alpha) * brake_avg);
 
-// =======================================================
-// CAN & ODRIVE FUNCTIONS
-// =======================================================
-void twai_send(uint32_t id, uint8_t* data, uint8_t len) {
-  twai_message_t msg = { .extd = 0, .rtr = 0, .data_length_code = len };
-  msg.identifier = id;
-  memcpy(msg.data, data, len);
-  twai_transmit(&msg, 0);
-}
-
-void set_odrive_velocity(float velocity) {
-  uint8_t data[8] = {0};
-  memcpy(&data[0], &velocity, 4);
-  twai_send((ODRIVE_NODE_ID << 5) | CMD_SET_INPUT_VEL, data, 8);
-}
-
-void request_can_data(uint8_t cmd_id) {
-  twai_message_t msg = { .extd = 0, .rtr = 1, .data_length_code = 0 }; 
-  msg.identifier = (ODRIVE_NODE_ID << 5) | cmd_id;
-  twai_transmit(&msg, 0);
-}
-
-void poll_can_messages() {
-  twai_message_t msg;
-  while (twai_receive(&msg, 0) == ESP_OK) {
-    if (msg.rtr) continue; 
-    uint8_t cmd_id = msg.identifier & 0x1F;
-    if (cmd_id == CMD_GET_ENCODER_ESTIMATES) memcpy(&odrv_vel, &msg.data[4], 4); 
-    if (cmd_id == CMD_GET_IQC) memcpy(&odrv_current, &msg.data[4], 4); 
-  }
-}
-
-// =======================================================
-// BRAKING LOGIC
-// =======================================================
-bool detectBraking() {
-  int timeoutTicks = deviceInfo.brakingTimeout / 20; 
-  static uint32_t prevMillis = 0;
-  static int16_t brakingCounter = 0;
-  
-  if (millis() - prevMillis > 10) {
-    prevMillis = millis();
-    currentProbeAnalog = analogRead(inductiveProbe);
-    
-    if (currentProbeAnalog < deviceInfo.brakingThreshold) {
-      brakingCounter++;
-      if (brakingCounter > timeoutTicks) { brakingCounter = timeoutTicks; isBraking = true; }
+  if (probe_state == 0) {
+    if (brake_start_time == 0) brake_start_time = millis(); 
+    if (millis() - brake_start_time > deviceInfo.brakingTimeout) {
+      brake_avg = 0.0; 
+      isBraking = true; 
     } else {
-      brakingCounter--;
-      if (brakingCounter < -timeoutTicks) { brakingCounter = -timeoutTicks; isBraking = false; }
+      isBraking = (brake_avg < 0.5); 
     }
-  }
-  return isBraking;
-}
-
-// =======================================================
-// BLE LOGIC
-// =======================================================
-static void notifyCallback(BLERemoteCharacteristic* pChar, uint8_t* data, size_t length, bool isNotify) {
-  bool hasWheel = (data[0] & 1);
-  int crankRevIndex = hasWheel ? 7 : 1;
-  int crankTimeIndex = hasWheel ? 9 : 3;
-
-  int cumulativeCrankRev = (data[crankRevIndex + 1] << 8) | data[crankRevIndex];
-  int lastCrankTime = (data[crankTimeIndex + 1] << 8) | data[crankTimeIndex];
-
-  int deltaRotations = cumulativeCrankRev - prevCumulativeCrankRev;
-  if (deltaRotations < 0) deltaRotations += 65535;
-
-  int timeDelta = lastCrankTime - prevCrankTime;
-  if (timeDelta < 0) timeDelta += 65535;
-
-  if (timeDelta != 0) {
-    prevCrankStaleness = 0;
-    double timeMins = ((double)timeDelta) / 1024.0 / 60.0;
-    prevRPM = ((double)deltaRotations) / timeMins;
-  } else if (prevCrankStaleness < stalenessLimit) {
-    prevCrankStaleness++;
   } else {
-    prevRPM = 0.0;
+    brake_start_time = 0; 
+    isBraking = (brake_avg < 0.5);
   }
-
-  prevCumulativeCrankRev = cumulativeCrankRev;
-  prevCrankTime = lastCrankTime;
-  cadence = (prevRPM > 160) ? 0 : (int)prevRPM;
 }
 
-class ClientCallback : public BLEClientCallbacks {
-  void onConnect(BLEClient* pclient) {
-    Serial.println("BLE Connected!");
-    if (deviceInfo.SCAN_FOR_DEVICE) {
-      deviceInfo.SCAN_FOR_DEVICE = false;
-      EEPROM.put(EEPROM_ADDRESS, deviceInfo);
-      EEPROM.commit();
-    }
-    connected = true;
-  }
-  void onDisconnect(BLEClient* pclient) {
-    connected = false;
-    Serial.println("BLE Disconnected!");
-  }
-};
+// =======================================================
+// WEB SERVER HANDLERS (Keep-Alive Enabled!)
+// =======================================================
+void handleRoot() {
+  server.send_P(200, "text/html", index_html);
+}
 
-class AdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
-  void onResult(BLEAdvertisedDevice advertisedDevice) {
-    // FIX 1: Changed .size() to .length()
-    if (advertisedDevice.getName().length() > 0) {
-      BLEAdvertisedDevice* d = new BLEAdvertisedDevice(advertisedDevice);
-      addDevice(d);
-    }
-  }
-};
+void handleData() {
+  float power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
+  char json[300];
+  snprintf(json, sizeof(json), "{\"cadence\":%d, \"power\":%.1f, \"probe\":%.2f, \"isBraking\":%s, \"thresh\":%d, \"timeout\":%d, \"ssid\":\"%s\", \"psk\":\"%s\"}", 
+           cadenceSensor.getCadence(), power, brake_avg, isBraking ? "true" : "false", deviceInfo.brakingThreshold, deviceInfo.brakingTimeout, deviceInfo.home_ssid, deviceInfo.home_pass);
+  
+  server.send(200, "application/json", json);
+}
 
-void connectToServer() {
-  if(client == nullptr) {
-    client = BLEDevice::createClient();
-    client->setClientCallbacks(new ClientCallback());
-  }
+void handleLog() {
+  server.send(200, "text/plain", log_buffer);
+}
 
-  bool result = false;
-  if (deviceInfo.SCAN_FOR_DEVICE && selectDevice() != nullptr) {
-    BLEAdvertisedDevice* dev = selectDevice();
-    strncpy(deviceInfo.macAddress, dev->getAddress().toString().c_str(), 17);
-    strncpy(deviceInfo.deviceName, dev->getName().c_str(), 19);
-    
-    // FIX 2: Cast the return type to esp_ble_addr_type_t
-    deviceInfo.addressType = (esp_ble_addr_type_t)dev->getAddressType(); 
-    
-    result = client->connect(dev);
-  } else if (!deviceInfo.SCAN_FOR_DEVICE && strlen(deviceInfo.macAddress) == 17) {
-    BLEAddress bleAddress(deviceInfo.macAddress);
-    result = client->connect(bleAddress, deviceInfo.addressType);
-  }
+void handleSettings() {
+  deviceInfo.brakingThreshold = server.arg("th").toInt();
+  deviceInfo.brakingTimeout = server.arg("ti").toInt();
+  EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
+  server.send(200, "text/plain", "OK");
+  addLog("Brake settings updated.");
+}
 
-  if (result) {
-    BLERemoteService* remoteService = client->getService(serviceUUID);
-    if (remoteService) {
-      sensorCharacteristic = remoteService->getCharacteristic(notifyUUID);
-      if (sensorCharacteristic) sensorCharacteristic->registerForNotify(notifyCallback);
-    }
-  }
+void handleWiFi() {
+  strncpy(deviceInfo.home_ssid, server.arg("s").c_str(), 31);
+  strncpy(deviceInfo.home_pass, server.arg("p").c_str(), 63);
+  EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
+  server.send(200, "text/plain", "OK");
+  delay(500); ESP.restart();
+}
+
+void handleScan() {
+  deviceInfo.SCAN_FOR_DEVICE = true;
+  EEPROM.put(EEPROM_ADDRESS, deviceInfo);
+  EEPROM.commit();
+  server.send(200, "text/plain", "Rebooting to scan...");
+  delay(500);
+  ESP.restart();
 }
 
 // =======================================================
 // SETUP
 // =======================================================
+
 void setup() {
   Serial.begin(115200);
 
@@ -221,92 +153,62 @@ void setup() {
   EEPROM.get(EEPROM_ADDRESS, deviceInfo);
   
   if(deviceInfo.brakingThreshold <= 0 || deviceInfo.brakingThreshold > 4096) {
-      deviceInfo.brakingThreshold = 2048;
-      deviceInfo.brakingTimeout = 2000;
+      deviceInfo.brakingThreshold = 2048; deviceInfo.brakingTimeout = 2000;
+      strncpy(deviceInfo.home_ssid, "wlesswg", 31);
+      strncpy(deviceInfo.home_pass, "hba.1245", 63);
   }
 
   pinMode(inductiveProbe, INPUT_PULLUP);
 
-  // --- HYBRID WIFI SETUP ---
-  Serial.println("\nAttempting to connect to Home WiFi...");
+  // --- Hybrid WiFi Setup ---
+  addLog("Connecting to Home WiFi...");
   WiFi.mode(WIFI_STA);
-  WiFi.begin(home_ssid, home_pass);
+  WiFi.begin(deviceInfo.home_ssid, deviceInfo.home_pass);
   
   int attempts = 0;
-  while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-    delay(500);
-    Serial.print(".");
-    attempts++;
-  }
+  while (WiFi.status() != WL_CONNECTED && attempts < 15) { delay(500); attempts++; }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nConnected to Home Network!");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
+    // FORMAT AND PRINT THE IP ADDRESS!
+    char msg[64];
+    snprintf(msg, sizeof(msg), "Connected to Home! IP: %s", WiFi.localIP().toString().c_str());
+    addLog(msg);
     isAPMode = false;
   } else {
-    Serial.println("\nHome network not found. Starting Access Point...");
+    addLog("Home Network not found. Starting AP...");
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
     WiFi.softAP(ap_ssid, ap_pass);
     dnsServer.start(DNS_PORT, "*", apIP);
-    Serial.print("AP Started! Connect to ESP-Cadence. IP: ");
-    Serial.println(WiFi.softAPIP());
+    
+    // FORMAT AND PRINT THE AP IP ADDRESS!
+    char msg[64];
+    snprintf(msg, sizeof(msg), "AP Started! IP: %s", WiFi.softAPIP().toString().c_str());
+    addLog(msg);
     isAPMode = true;
   }
   
+  // Attach the OTA safety callbacks!
   ArduinoOTA.setHostname("odrive-node");
+  ArduinoOTA.onStart(handleOTAStart);
+  ArduinoOTA.onEnd(handleOTAEnd);
+  ArduinoOTA.onError(handleOTAError);
   ArduinoOTA.begin();
 
-  // --- Web Server Setup ---
-  server.on("/", HTTP_GET,[]() { server.send(200, "text/html", index_html); });
-  
-  server.on("/api/data", HTTP_GET,[]() {
-    float power = abs((odrv_current * 0.356) * (odrv_vel * 6.283185));
-    char json[200];
-    snprintf(json, sizeof(json), "{\"cadence\":%d, \"power\":%.1f, \"probe\":%d, \"isBraking\":%s, \"thresh\":%d, \"timeout\":%d}", 
-             cadence, power, currentProbeAnalog, isBraking ? "true" : "false", deviceInfo.brakingThreshold, deviceInfo.brakingTimeout);
-    server.send(200, "application/json", json);
-  });
-
-  server.on("/api/settings", HTTP_POST,[]() {
-    deviceInfo.brakingThreshold = server.arg("th").toInt();
-    deviceInfo.brakingTimeout = server.arg("ti").toInt();
-    EEPROM.put(EEPROM_ADDRESS, deviceInfo);
-    EEPROM.commit();
-    server.send(200, "text/plain", "OK");
-  });
-
-  server.on("/api/scan", HTTP_POST,[]() {
-    deviceInfo.SCAN_FOR_DEVICE = true;
-    EEPROM.put(EEPROM_ADDRESS, deviceInfo);
-    EEPROM.commit();
-    server.send(200, "text/plain", "Rebooting...");
-    delay(500);
-    ESP.restart();
-  });
-
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/api/data", HTTP_GET, handleData);
+  server.on("/api/log", HTTP_GET, handleLog);
+  server.on("/api/settings", HTTP_POST, handleSettings);
+  server.on("/api/wifi", HTTP_POST, handleWiFi);
+  server.on("/api/scan", HTTP_POST, handleScan);
   server.begin();
 
-  // --- CAN & ODrive Setup ---
-  twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_PIN, CAN_RX_PIN, TWAI_MODE_NORMAL);
-  twai_timing_config_t t_config = TWAI_TIMING_CONFIG_250KBITS(); 
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
-  twai_driver_install(&g_config, &t_config, &f_config);
-  twai_start();
+  odrive.begin(CAN_TX_PIN, CAN_RX_PIN);
+  odrive.setMode(1, 1); 
+  delay(10);
+  odrive.setState(8);
 
-  uint32_t state = 8; 
-  uint8_t mode[8] = {2, 0, 0, 0, 1, 0, 0, 0}; 
-  twai_send((ODRIVE_NODE_ID << 5) | CMD_SET_CONTROLLER_MODE, mode, 8);
-  twai_send((ODRIVE_NODE_ID << 5) | CMD_SET_AXIS_STATE, (uint8_t*)&state, 4);
-
-  // --- BLE Setup ---
-  BLEDevice::init("");
-  if(deviceInfo.SCAN_FOR_DEVICE) {
-    scanner = BLEDevice::getScan();
-    scanner->setAdvertisedDeviceCallbacks(new AdvertisedDeviceCallbacks());
-    scanner->setActiveScan(true);
-  }
+  cadenceSensor.begin(deviceInfo.SCAN_FOR_DEVICE, deviceInfo.macAddress, deviceInfo.addressType);
 }
 
 // =======================================================
@@ -315,42 +217,50 @@ void setup() {
 unsigned long last_cmd_time = 0;
 
 void loop() {
-  if (isAPMode) dnsServer.processNextRequest();
-  
-  server.handleClient();
-  ArduinoOTA.handle();
-  poll_can_messages();
-  
-  detectBraking();
-
-  // --- BLE Connection Handler ---
-  if (deviceInfo.SCAN_FOR_DEVICE && !connected) {
-    set_odrive_velocity(0.0); 
-    scanner->start(11, false);
-    BLEDevice::getScan()->stop();
-    if (selectDevice() != nullptr) connectToServer();
-  } 
-  else if (!deviceInfo.SCAN_FOR_DEVICE && !connected) {
-    connectToServer();
+  // If updating, ONLY handle OTA and skip absolutely everything else!
+  if (isUpdating) {
+    ArduinoOTA.handle();
+    return; 
   }
 
-  // --- MOTOR CONTROL (50Hz) ---
+  if (isAPMode) dnsServer.processNextRequest();
+  server.handleClient();
+  ArduinoOTA.handle();
+  
+  odrive.poll();
+  cadenceSensor.loop();
+  Flash this via USB. Open your Serial Moni
+  updateBrakeLogic();
+
+  if (cadenceSensor.foundNewDevice()) {
+    strlcpy(deviceInfo.macAddress, cadenceSensor.getNewMac(), sizeof(deviceInfo.macAddress));
+    strlcpy(deviceInfo.deviceName, cadenceSensor.getNewName(), sizeof(deviceInfo.deviceName));
+    deviceInfo.addressType = cadenceSensor.getNewAddressType();
+    
+    // FIX: Tell the EEPROM to stop scanning on the next boot!
+    deviceInfo.SCAN_FOR_DEVICE = false; 
+    
+    EEPROM.put(EEPROM_ADDRESS, deviceInfo);
+    EEPROM.commit();
+    cadenceSensor.clearNewDeviceFlag();
+    addLog("Saved new BLE Sensor to EEPROM!");
+  }
+
   if (millis() - last_cmd_time >= 20) {
     last_cmd_time = millis();
-    
-    float target_motor_velocity = 0.0;
+    float target_motor_torque = 0.0;
 
     if (isBraking) {
-      target_motor_velocity = 0.0; 
+      target_motor_torque = 0.0; 
     } 
-    else if (cadence > 0) {
-      float CADENCE_MULTIPLIER = 0.05; 
-      target_motor_velocity = cadence * CADENCE_MULTIPLIER;
+    else if (cadenceSensor.getCadence() > 0) {
+      float CADENCE_TO_TORQUE_MULTIPLIER = 0.01; 
+      float base_torque = cadenceSensor.getCadence() * CADENCE_TO_TORQUE_MULTIPLIER;
+      target_motor_torque = base_torque * brake_avg;
     }
 
-    set_odrive_velocity(target_motor_velocity);
-
-    request_can_data(CMD_GET_ENCODER_ESTIMATES);
-    request_can_data(CMD_GET_IQC);
+    odrive.setTorque(target_motor_torque);
+    odrive.requestData(CMD_GET_ENCODER_ESTIMATES);
+    odrive.requestData(CMD_GET_IQC);
   }
 }
