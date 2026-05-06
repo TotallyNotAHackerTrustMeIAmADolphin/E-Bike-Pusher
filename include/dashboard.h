@@ -1,4 +1,3 @@
-// dashboard.h
 #ifndef DASHBOARD_H
 #define DASHBOARD_H
 
@@ -16,10 +15,10 @@ const char index_html[] PROGMEM = R"rawliteral(
     .alert { color: #ff3b30 !important; }
     
     .panel { background: #1a1a1a; padding: 15px; border-radius: 8px; margin-top: 15px; text-align: left; }
-    input { width: 120px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; float: right; }
+    input { width: 100px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; float: right; }
     button { background: #00d2ff; color: #000; border: none; padding: 10px; border-radius: 5px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 10px; }
     .danger { background: #ff3b30; color: white; }
-    p { margin: 8px 0; clear: both; overflow: hidden; line-height: 24px; }
+    p { margin: 8px 0; clear: both; overflow: hidden; line-height: 24px; font-size: 14px; color: #ddd; }
     
     textarea { width: 100%; height: 120px; background: #000; color: #0f0; border: 1px solid #333; padding: 5px; font-family: monospace; font-size: 11px; resize: none; box-sizing: border-box; }
   </style>
@@ -40,10 +39,13 @@ const char index_html[] PROGMEM = R"rawliteral(
   </div>
 
   <div class="panel">
-    <h3 style="margin-top:0; color:#aaa;">Control Settings</h3>
+    <h3 style="margin-top:0; color:#aaa;">Tuning & Settings</h3>
     <p>Brake Threshold: <input type="number" id="th"></p>
     <p>Timeout (ms): <input type="number" id="ti"></p>
-    <button onclick="saveBrake()">Save Brake Settings</button>
+    <p>Torque Multiplier: <input type="number" step="0.01" id="tm"></p>
+    <p>Brake Smoothing (Alpha): <input type="number" step="0.01" id="ba"></p>
+    <button onclick="saveSettings()">Save Tuning</button>
+    
     <hr style="border-color:#333; margin:15px 0;">
     <p>Home SSID: <input type="text" id="ssid"></p>
     <p>Home Pass: <input type="password" id="psk"></p>
@@ -57,7 +59,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       fetch('/api/data').then(res => res.json()).then(d => {
         document.getElementById("cad").innerText = d.cadence;
         document.getElementById("pwr").innerText = d.power.toFixed(1);
-        document.getElementById("prb").innerText = d.probe.toFixed(2);
+        document.getElementById("prb").innerText = d.probe; // Raw analog value
         
         let bs = document.getElementById("b_stat");
         if(d.isBraking) { bs.innerText = "BRAKING"; bs.classList.add("alert"); } 
@@ -65,25 +67,34 @@ const char index_html[] PROGMEM = R"rawliteral(
         
         if (document.activeElement !== document.getElementById('th')) document.getElementById("th").value = d.thresh;
         if (document.activeElement !== document.getElementById('ti')) document.getElementById("ti").value = d.timeout;
+        if (document.activeElement !== document.getElementById('tm')) document.getElementById("tm").value = d.t_mult.toFixed(3);
+        if (document.activeElement !== document.getElementById('ba')) document.getElementById("ba").value = d.b_alpha.toFixed(3);
         if (document.activeElement !== document.getElementById('ssid')) document.getElementById("ssid").value = d.ssid;
         if (document.activeElement !== document.getElementById('psk')) document.getElementById("psk").value = d.psk;
         
-        setTimeout(updateTelemetry, 1000); // Relaxed to 1 update per second
-      }).catch(e => setTimeout(updateTelemetry, 2000));
+        setTimeout(updateTelemetry, 500); 
+      }).catch(e => setTimeout(updateTelemetry, 1000));
     }
     
     function updateLog() {
       fetch('/api/log').then(res => res.text()).then(txt => {
         let logbox = document.getElementById("syslog");
         if(logbox.value !== txt) { logbox.value = txt; logbox.scrollTop = logbox.scrollHeight; }
-        setTimeout(updateLog, 2000); // Update logs every 2 seconds
-      }).catch(e => setTimeout(updateLog, 3000));
+        setTimeout(updateLog, 2000); 
+      }).catch(e => setTimeout(updateLog, 2000));
     }
 
     updateTelemetry();
     updateLog();
 
-    function saveBrake() { fetch('/api/settings?th=' + document.getElementById("th").value + '&ti=' + document.getElementById("ti").value, { method: 'POST' }); alert("Saved!"); }
+    function saveSettings() { 
+      let th = document.getElementById("th").value;
+      let ti = document.getElementById("ti").value;
+      let tm = document.getElementById("tm").value;
+      let ba = document.getElementById("ba").value;
+      fetch(`/api/settings?th=${th}&ti=${ti}&tm=${tm}&ba=${ba}`, { method: 'POST' }); 
+      alert("Tuning Saved to EEPROM!"); 
+    }
     function saveWiFi() { fetch('/api/wifi?s=' + encodeURIComponent(document.getElementById("ssid").value) + '&p=' + encodeURIComponent(document.getElementById("psk").value), { method: 'POST' }); alert("Saved. ESP32 Rebooting!"); }
     function startScan() { if(confirm("Reboot and scan for a new sensor?")) fetch('/api/scan', { method: 'POST' }); }
   </script>
