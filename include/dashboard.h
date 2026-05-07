@@ -42,8 +42,8 @@ const char index_html[] PROGMEM = R"rawliteral(
     <h3 style="margin-top:0; color:#aaa;">Tuning & Settings</h3>
     <p>Brake Threshold: <input type="number" id="th"></p>
     <p>Timeout (ms): <input type="number" id="ti"></p>
-    <p>Torque Multiplier: <input type="number" step="0.01" id="tm"></p>
-    <p>Brake Smoothing (Alpha): <input type="number" step="0.01" id="ba"></p>
+    <p>Max Push Force (A): <input type="number" step="0.1" id="tm"></p>
+    <p>Brake Smoothing: <input type="number" step="0.01" id="ba"></p>
     <button onclick="saveSettings()">Save Tuning</button>
     
     <hr style="border-color:#333; margin:15px 0;">
@@ -55,11 +55,16 @@ const char index_html[] PROGMEM = R"rawliteral(
   </div>
 
   <script>
-    function updateTelemetry() {
-      fetch('/api/data').then(res => res.json()).then(d => {
+    // CRASH-PROOF SEQUENTIAL FETCH
+    async function updateDashboard() {
+      try {
+        // 1. Fetch Data
+        let res = await fetch('/api/data', { cache: 'no-store' });
+        let d = await res.json();
+        
         document.getElementById("cad").innerText = d.cadence;
         document.getElementById("pwr").innerText = d.power.toFixed(1);
-        document.getElementById("prb").innerText = d.probe; // Raw analog value
+        document.getElementById("prb").innerText = d.probe; 
         
         let bs = document.getElementById("b_stat");
         if(d.isBraking) { bs.innerText = "BRAKING"; bs.classList.add("alert"); } 
@@ -71,21 +76,22 @@ const char index_html[] PROGMEM = R"rawliteral(
         if (document.activeElement !== document.getElementById('ba')) document.getElementById("ba").value = d.b_alpha.toFixed(3);
         if (document.activeElement !== document.getElementById('ssid')) document.getElementById("ssid").value = d.ssid;
         if (document.activeElement !== document.getElementById('psk')) document.getElementById("psk").value = d.psk;
-        
-        setTimeout(updateTelemetry, 500); 
-      }).catch(e => setTimeout(updateTelemetry, 1000));
-    }
-    
-    function updateLog() {
-      fetch('/api/log').then(res => res.text()).then(txt => {
+
+        // 2. Fetch Logs ONLY after Data finishes
+        let resLog = await fetch('/api/log', { cache: 'no-store' });
+        let txt = await resLog.text();
         let logbox = document.getElementById("syslog");
         if(logbox.value !== txt) { logbox.value = txt; logbox.scrollTop = logbox.scrollHeight; }
-        setTimeout(updateLog, 2000); 
-      }).catch(e => setTimeout(updateLog, 2000));
+
+      } catch (e) {
+        console.log("Network busy, retrying...");
+      }
+      
+      // 3. Sleep 500ms and repeat safely!
+      setTimeout(updateDashboard, 500); 
     }
 
-    updateTelemetry();
-    updateLog();
+    updateDashboard();
 
     function saveSettings() { 
       let th = document.getElementById("th").value;
