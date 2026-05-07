@@ -25,7 +25,7 @@ struct DeviceInfo {
   bool SCAN_FOR_DEVICE;            
   int brakingThreshold;            
   int brakingTimeout;              
-  float torqueMultiplier; // <--- This now serves as MAX_TORQUE limit
+  float torqueMultiplier; 
   float brakeAlpha;                
   char home_ssid[32];              
   char home_pass[64];              
@@ -33,19 +33,25 @@ struct DeviceInfo {
 DeviceInfo deviceInfo;
 
 // =======================================================
-// MEMORY-SAFE LOGGING BUFFER
+// MEMORY-SAFE LOGGING BUFFER (Patched to prevent crashes!)
 // =======================================================
 char log_buffer[1024] = "System Booting...\n";
 
 void addLog(const char* msg) {
   Serial.println(msg);
   int msg_len = strlen(msg);
+  if (msg_len > 256) return; // Safety limit
   int cur_len = strlen(log_buffer);
   
   if (cur_len + msg_len + 2 > sizeof(log_buffer)) {
     int shift = (cur_len + msg_len + 2) - sizeof(log_buffer);
-    memmove(log_buffer, log_buffer + shift, cur_len - shift + 1);
-    cur_len -= shift;
+    if (shift >= cur_len) {
+        log_buffer[0] = '\0'; // Wipe if corrupted
+        cur_len = 0;
+    } else {
+        memmove(log_buffer, log_buffer + shift, cur_len - shift + 1);
+        cur_len -= shift;
+    }
   }
   strcat(log_buffer, msg);
   strcat(log_buffer, "\n");
@@ -82,18 +88,13 @@ bool isUpdating = false;
 
 void handleOTAStart() {
   isUpdating = true;
-  odrive.setTorque(0.0); 
-  
-  Serial.println("\nOTA Update Started! Shutting down hardware interrupts...");
-  
-  server.stop();
-  dnsServer.stop();
-  twai_stop();
-  BLEDevice::deinit(true); 
+  odrive.setTorque(0.0); // Stop motor safely!
+  Serial.println("\nOTA Update Started! Freezing background tasks safely...");
+  // Removed the aggressive hardware .stop() commands that caused Kernel Panics!
 }
 
 void handleOTAEnd() { Serial.println("\nOTA Update Finished! Rebooting..."); }
-void handleOTAError(ota_error_t error) { ESP.restart(); } 
+void handleOTAError(ota_error_t error) { ESP.restart(); }
 
 // =======================================================
 // RUNNING-AVERAGE BRAKING LOGIC
@@ -122,23 +123,28 @@ void updateBrakeLogic() {
 // WEB SERVER HANDLERS
 // =======================================================
 void handleRoot() { 
+  server.sendHeader("Connection", "close");
   server.send_P(200, "text/html", index_html); 
 }
 
 void handleData() {
+  server.sendHeader("Connection", "close");
   float power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
-  char json[512]; // Increased to safely hold longer WiFi passwords without overflowing!
+  char json[512]; 
   snprintf(json, sizeof(json), "{\"cadence\":%d, \"power\":%.1f, \"probe\":%d, \"isBraking\":%s, \"thresh\":%d, \"timeout\":%d, \"t_mult\":%.3f, \"b_alpha\":%.3f, \"ssid\":\"%s\", \"psk\":\"%s\"}", 
            cadenceSensor.getCadence(), power, currentProbeAnalog, isBraking ? "true" : "false", 
            deviceInfo.brakingThreshold, deviceInfo.brakingTimeout, deviceInfo.torqueMultiplier, deviceInfo.brakeAlpha,
            deviceInfo.home_ssid, deviceInfo.home_pass);
-  
   server.send(200, "application/json", json);
 }
 
-void handleLog() { server.send(200, "text/plain", log_buffer); }
+void handleLog() { 
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/plain", log_buffer); 
+}
 
 void handleSettings() {
+  server.sendHeader("Connection", "close");
   deviceInfo.brakingThreshold = server.arg("th").toInt();
   deviceInfo.brakingTimeout = server.arg("ti").toInt();
   deviceInfo.torqueMultiplier = server.arg("tm").toFloat(); 
@@ -149,6 +155,7 @@ void handleSettings() {
 }
 
 void handleWiFi() {
+  server.sendHeader("Connection", "close");
   strncpy(deviceInfo.home_ssid, server.arg("s").c_str(), 31);
   strncpy(deviceInfo.home_pass, server.arg("p").c_str(), 63);
   EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
@@ -157,6 +164,7 @@ void handleWiFi() {
 }
 
 void handleScan() {
+  server.sendHeader("Connection", "close");
   deviceInfo.SCAN_FOR_DEVICE = true;
   EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
   server.send(200, "text/plain", "Rebooting to scan...");
@@ -168,7 +176,7 @@ void handleScan() {
 // =======================================================
 void setup() {
   Serial.begin(115200);
-  WiFi.setSleep(false);
+  WiFi.setSleep(false); // Force WiFi awake for stable high-speed OTA!
 
   pinMode(pullupPowerPin, OUTPUT);
   digitalWrite(pullupPowerPin, HIGH); 
@@ -248,7 +256,7 @@ void loop() {
   ArduinoOTA.handle();
 
   if (isUpdating) {
-    yield(); 
+    delay(1); // Feed the watchdog timer!
     return; 
   }
 
@@ -257,8 +265,6 @@ void loop() {
   
   odrive.poll();
   cadenceSensor.loop();
-  
-  updateBrakeLogic();
 
   if (cadenceSensor.foundNewDevice()) {
     strlcpy(deviceInfo.macAddress, cadenceSensor.getNewMac(), sizeof(deviceInfo.macAddress));
@@ -273,9 +279,12 @@ void loop() {
     addLog("Saved new BLE Sensor to EEPROM!");
   }
 
-  // --- MOTOR CONTROL (50Hz) ---
+  // --- 50Hz MOTOR CONTROL TIMER ---
   if (millis() - last_cmd_time >= 20) {
     last_cmd_time = millis();
+    
+    // THE FIX: The math is now safely anchored to exactly 50Hz!
+    updateBrakeLogic();
     
     float target_motor_torque = 0.0;
 
@@ -283,9 +292,6 @@ void loop() {
       target_motor_torque = 0.0; 
     } 
     else if (cadenceSensor.getCadence() > 0) {
-      // NEW PHYSICS LOGIC!
-      // Torque is now proportional to hitch extension (brake_avg), not pedaling speed.
-      // deviceInfo.torqueMultiplier serves as the MAXIMUM allowed pushing force.
       target_motor_torque = deviceInfo.torqueMultiplier * brake_avg;
     }
 
