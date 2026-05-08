@@ -51,7 +51,7 @@ class MyServerCallbacks : public NimBLEServerCallbacks
 {
   void onConnect(NimBLEServer *pServer, ble_gap_conn_desc *desc)
   {
-    pServer->startAdvertising();
+    pServer->updateConnParams(desc->conn_handle, 12, 12, 0, 60); // Optimize for speed
     phone_conn_id = desc->conn_handle;
     deviceConnected = true;
     addLog("[BLE] Dashboard Connected!");
@@ -83,7 +83,7 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
         triggerEEPROMSave();
       else if (rxValue == "GET")
       {
-        char msg[200];
+        char msg[250]; // Large buffer for SSID/Pass
         snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"tm\":%.2f,\"tc\":%.2f,\"s\":\"%s\",\"p\":\"%s\"}",
                  deviceInfo.brakingThreshold, deviceInfo.torqueMultiplier,
                  deviceInfo.brakeTimeConstant, deviceInfo.home_ssid, deviceInfo.home_pass);
@@ -92,19 +92,23 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
       }
       else if (rxValue.startsWith("CFG:"))
       {
-        int s1 = rxValue.indexOf(':', 4), s2 = rxValue.indexOf(':', s1 + 1);
+        // Input: CFG:th:tm:tc
+        int s1 = rxValue.indexOf(':', 4);
+        int s2 = rxValue.indexOf(':', s1 + 1);
+
         if (s1 > 0 && s2 > 0)
         {
           deviceInfo.brakingThreshold = rxValue.substring(4, s1).toInt();
           deviceInfo.torqueMultiplier = rxValue.substring(s1 + 1, s2).toFloat();
           deviceInfo.brakeTimeConstant = rxValue.substring(s2 + 1).toFloat();
+          addLog("Live Tuning Updated.");
         }
       }
       else if (rxValue.startsWith("WIFI:"))
       {
-        int s1 = rxValue.indexOf(':'), s2 = rxValue.indexOf(':', s1 + 1);
-        if (s1 > 0 && s2 > 0)
-          triggerWiFiSave(rxValue.substring(s1 + 1, s2), rxValue.substring(s2 + 1));
+        int s1 = rxValue.indexOf(':', 5);
+        if (s1 > 0)
+          triggerWiFiSave(rxValue.substring(5, s1), rxValue.substring(s1 + 1));
       }
     }
   }
@@ -113,14 +117,14 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
 void dash_begin()
 {
   NimBLEDevice::init("E-Bike Pusher");
-  NimBLEDevice::setMTU(256); // THE FIX: Gives us 256 bytes per packet instead of 20!
+  NimBLEDevice::setMTU(256);
 
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
   NimBLEService *pService = pServer->createService(SERVICE_UUID);
 
   pTxCharacteristic = pService->createCharacteristic(CHAR_TX_UUID, NIMBLE_PROPERTY::NOTIFY);
-  NimBLECharacteristic *pRxCharacteristic = pService->createCharacteristic(CHAR_RX_UUID, NIMBLE_PROPERTY::WRITE);
+  pRxCharacteristic = pService->createCharacteristic(CHAR_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   pRxCharacteristic->setCallbacks(new MyRxCallbacks());
   pLogCharacteristic = pService->createCharacteristic(CHAR_LOG_UUID, NIMBLE_PROPERTY::NOTIFY);
 
@@ -134,7 +138,7 @@ void dash_loop()
   if (restartAdvertising)
   {
     delay(200);
-    pServer->startAdvertising();
+    NimBLEDevice::getAdvertising()->start();
     restartAdvertising = false;
   }
 }
@@ -143,7 +147,7 @@ void dash_sendTelemetry(int cadence, float power, float voltage, float current, 
 {
   if (deviceConnected)
   {
-    char json[120];
+    char json[128];
     snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"a\":%.1f,\"pr\":%.2f,\"tq\":%.2f}",
              cadence, power, voltage, current, brake_avg, target_torque);
     pTxCharacteristic->setValue((uint8_t *)json, strlen(json));

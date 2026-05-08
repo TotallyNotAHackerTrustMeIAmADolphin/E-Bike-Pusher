@@ -162,16 +162,22 @@
     const RX_UUID = "828917c1-ea55-4d4a-a66e-fd202cea0645";
     const LOG_UUID = "5111b1db-2917-48f8-b3d5-e51c8f35fc06";
     let bleRxChar = null;
+    let bleDevice = null;
 
     async function connectBLE() {
       try {
-        const device = await navigator.bluetooth.requestDevice({ filters: [{ name: 'E-Bike Pusher' }], optionalServices: [SERVICE_UUID] });
-        device.addEventListener('gattserverdisconnected', onDisconnected);
-        document.getElementById("connectBtn").innerText = "Connecting...";
+        bleDevice = await navigator.bluetooth.requestDevice({
+          filters: [{ name: 'E-Bike Pusher' }],
+          optionalServices: [SERVICE_UUID]
+        });
+        bleDevice.addEventListener('gattserverdisconnected', () => {
+          document.getElementById("connectBtn").innerText = "Connect to Bike";
+          document.getElementById("connectBtn").style.background = "#00d2ff";
+          bleRxChar = null;
+        });
 
-        const server = await device.gatt.connect();
+        const server = await bleDevice.gatt.connect();
         const service = await server.getPrimaryService(SERVICE_UUID);
-
         bleRxChar = await service.getCharacteristic(RX_UUID);
         const txChar = await service.getCharacteristic(TX_UUID);
         const logChar = await service.getCharacteristic(LOG_UUID);
@@ -179,72 +185,66 @@
         await txChar.startNotifications();
         txChar.addEventListener('characteristicvaluechanged', handleTelemetry);
         await logChar.startNotifications();
-        logChar.addEventListener('characteristicvaluechanged', handleLiveLog);
+        logChar.addEventListener('characteristicvaluechanged', (e) => {
+          const msg = new TextDecoder().decode(e.target.value);
+          let lb = document.getElementById("syslog");
+          lb.value += msg + "\n";
+          lb.scrollTop = lb.scrollHeight;
+        });
 
         document.getElementById("connectBtn").innerText = "Connected!";
         document.getElementById("connectBtn").style.background = "#00ea8d";
-
-        setTimeout(() => sendCommand("GET"), 500);
-      } catch (e) { document.getElementById("connectBtn").innerText = "Connect to Bike"; }
-    }
-
-    function onDisconnected(event) {
-      document.getElementById("connectBtn").innerText = "Connect to Bike";
-      document.getElementById("connectBtn").style.background = "#00d2ff";
-      bleRxChar = null;
+        setTimeout(() => sendCommand("GET"), 600);
+      } catch (e) { console.log(e); }
     }
 
     function handleTelemetry(event) {
       const value = new TextDecoder().decode(event.target.value);
       try {
         const d = JSON.parse(value);
-        if (d.cfg) {
-          document.getElementById("th").value = d.th;
-          document.getElementById("tm").value = d.tm.toFixed(2);
-          document.getElementById("tc").value = d.tc.toFixed(2);
-          document.getElementById("ssid").value = d.s;
-          document.getElementById("psk").value = d.p;
+
+        // Populate settings ONLY if the "cfg" flag is present
+        if (d.cfg === 1) {
+          if (d.th !== undefined) document.getElementById("th").value = d.th;
+          if (d.tm !== undefined) document.getElementById("tm").value = d.tm.toFixed(2);
+          if (d.tc !== undefined) document.getElementById("tc").value = d.tc.toFixed(2);
+          if (d.s !== undefined) document.getElementById("ssid").value = d.s;
+          if (d.p !== undefined) document.getElementById("psk").value = d.p;
+          console.log("Settings Loaded from Bike");
           return;
         }
 
+        // Standard Telemetry
         document.getElementById("cad").innerText = d.c;
         document.getElementById("pwr").innerText = d.p.toFixed(0);
         document.getElementById("vol").innerText = d.v.toFixed(1);
         document.getElementById("amp").innerText = d.a.toFixed(1);
         document.getElementById("prb").innerText = d.pr.toFixed(2);
+        document.getElementById("tq").innerText = d.tq.toFixed(2);
 
         let tqElement = document.getElementById("tq");
-        tqElement.innerText = d.tq.toFixed(2);
-        if (d.tq < 0) tqElement.style.color = "#ff3b30"; // Turn Red if Active Braking!
-        else tqElement.style.color = "#00ea8d";
+        tqElement.style.color = (d.tq < 0) ? "#ff3b30" : "#00ea8d";
       } catch (e) { }
     }
 
-    function handleLiveLog(event) {
-      const msg = new TextDecoder().decode(event.target.value);
-      let logbox = document.getElementById("syslog");
-      logbox.value += msg + "\n";
-      logbox.scrollTop = logbox.scrollHeight;
+    async function sendCommand(cmd) {
+      if (!bleRxChar) return;
+      await bleRxChar.writeValue(new TextEncoder().encode(cmd));
     }
 
-    async function sendCommand(cmd) { if (!bleRxChar) return; let encoder = new TextEncoder(); await bleRxChar.writeValue(encoder.encode(cmd)); }
-
-    let tuneTimer;
     function sendTuning() {
-      clearTimeout(tuneTimer);
-      tuneTimer = setTimeout(() => {
-        let th = document.getElementById("th").value;
-        let tm = document.getElementById("tm").value;
-        let tc = document.getElementById("tc").value;
-        sendCommand(`CFG:${th}:${tm}:${tc}`);
-      }, 500);
+      let th = document.getElementById("th").value;
+      let tm = document.getElementById("tm").value;
+      let tc = document.getElementById("tc").value;
+      sendCommand(`CFG:${th}:${tm}:${tc}`);
     }
 
-    function commitSettings() { sendCommand("SAVE"); }
+    function commitSettings() { sendCommand("SAVE"); alert("Saved to Flash!"); }
     function saveWiFi() {
-      let ssid = document.getElementById("ssid").value;
-      let psk = document.getElementById("psk").value;
-      sendCommand("WIFI:" + ssid + ":" + psk);
+      let s = document.getElementById("ssid").value;
+      let p = document.getElementById("psk").value;
+      sendCommand(`WIFI:${s}:${p}`);
+      alert("WiFi Saved! Rebooting...");
     }
   </script>
 </body>

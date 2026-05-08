@@ -140,23 +140,20 @@ void setup()
   EEPROM.begin(EEPROM_SIZE);
   EEPROM.get(EEPROM_ADDRESS, deviceInfo);
 
-  // Setup hardware bus first
-  pinMode(pullupPowerPin, OUTPUT);
-  digitalWrite(pullupPowerPin, HIGH);
-  pinMode(inductiveProbe, INPUT);
-
-  // EEPROM Data Integrity Check
-  if (deviceInfo.brakingThreshold <= 0 || deviceInfo.brakingThreshold > 4096 || isnan(deviceInfo.torqueMultiplier))
+  // Strict validation check
+  if (deviceInfo.brakingThreshold < 100 || deviceInfo.brakingThreshold > 4000 ||
+      deviceInfo.torqueMultiplier < 0 || isnan(deviceInfo.torqueMultiplier))
   {
+
     deviceInfo.brakingThreshold = 2048;
-    deviceInfo.torqueMultiplier = 1.0;  // 1 Amp default
-    deviceInfo.brakeTimeConstant = 0.5; // 0.5s default smoothing
+    deviceInfo.torqueMultiplier = 1.0;
+    deviceInfo.brakeTimeConstant = 0.5;
     strncpy(deviceInfo.home_ssid, "wlesswg", 31);
     strncpy(deviceInfo.home_pass, "hba.1245", 63);
     deviceInfo.maintenanceMode = false;
     EEPROM.put(EEPROM_ADDRESS, deviceInfo);
     EEPROM.commit();
-    Serial.println("EEPROM Reset to defaults.");
+    Serial.println("EEPROM Format Invalid. Reset to Defaults.");
   }
 
   if (deviceInfo.maintenanceMode)
