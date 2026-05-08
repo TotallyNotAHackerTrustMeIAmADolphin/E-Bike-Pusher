@@ -39,7 +39,7 @@ void CadenceSensor::begin(bool scanMode, const char* savedMac, esp_ble_addr_type
   _targetMac = String(savedMac);
   _targetType = savedType;
 
-  BLEDevice::init("");
+  // BLEDevice::init(""); //is now in main.cpp because of bluetooth dashboard
   
   if (_scanMode) {
     addLog("BLE Scanning started...");
