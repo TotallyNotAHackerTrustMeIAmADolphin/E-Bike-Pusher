@@ -1,7 +1,8 @@
 // ODriveCAN.cpp
 #include "ODriveCAN.h"
 
-ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0) {}
+ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0) {}
+
 
 bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin) {
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(tx_pin, rx_pin, TWAI_MODE_NORMAL);
@@ -29,6 +30,7 @@ void ODriveCAN::requestData(uint8_t cmd_id) {
   twai_transmit(&msg, 0);
 }
 
+// Replace your poll() function with this to parse Voltage:
 void ODriveCAN::poll() {
   twai_message_t msg;
   while (twai_receive(&msg, 0) == ESP_OK) {
@@ -42,6 +44,9 @@ void ODriveCAN::poll() {
         memcpy(&odrv_vel, &msg.data[4], 4); 
       } else if (cmd_id == CMD_GET_IQC) {
         memcpy(&odrv_current, &msg.data[4], 4); 
+      } else if (cmd_id == CMD_GET_VBUS_VOLTAGE) {
+        memcpy(&odrv_vbus, &msg.data[0], 4); // Voltage is bytes 0-3
+        memcpy(&odrv_ibus, &msg.data[4], 4); // Battery Amps is bytes 4-7
       }
     }
   }
@@ -74,3 +79,5 @@ void ODriveCAN::setVelocity(float velocity) {
 
 float ODriveCAN::getVelocity() const { return odrv_vel; }
 float ODriveCAN::getCurrent() const { return odrv_current; }
+float ODriveCAN::getVoltage() const { return odrv_vbus; }
+float ODriveCAN::getBusCurrent() const { return odrv_ibus; }

@@ -6,9 +6,9 @@
   <style>
     body { font-family: 'Segoe UI', Arial, sans-serif; background: #121212; color: #fff; text-align: center; margin: 0; padding: 10px; }
     .grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 10px; }
-    .card { background: #1e1e1e; border-radius: 8px; padding: 15px; width: 135px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
-    .val { font-size: 26px; font-weight: bold; margin: 10px 0; color: #00ea8d; }
-    .lbl { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
+    .card { background: #1e1e1e; border-radius: 8px; padding: 15px; width: 100px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); }
+    .val { font-size: 24px; font-weight: bold; margin: 10px 0; color: #00ea8d; }
+    .lbl { font-size: 10px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
     .alert { color: #ff3b30 !important; }
     .panel { background: #1a1a1a; padding: 15px; border-radius: 8px; margin-top: 15px; text-align: left; }
     input { width: 80px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; float: right; }
@@ -23,10 +23,12 @@
   <button id="connectBtn" onclick="connectBLE()">Connect to Bike</button>
   
   <div class="grid">
-    <div class="card"><div class="lbl">Brake Status</div><div class="val" id="b_stat">--</div></div>
-    <div class="card"><div class="lbl">Cadence (RPM)</div><div class="val" id="cad">--</div></div>
-    <div class="card"><div class="lbl">Power (W)</div><div class="val" id="pwr">--</div></div>
-    <div class="card"><div class="lbl">Brake Factor</div><div class="val" id="prb">--</div></div>
+    <div class="card"><div class="lbl">Status</div><div class="val" id="b_stat">--</div></div>
+    <div class="card"><div class="lbl">Cadence</div><div class="val" id="cad">--</div></div>
+    <div class="card"><div class="lbl">Elec Pwr (W)</div><div class="val" id="pwr">--</div></div>
+    <div class="card"><div class="lbl">Battery (V)</div><div class="val" id="vol">--</div></div>
+    <div class="card"><div class="lbl">Phase (A)</div><div class="val" id="amp">--</div></div>
+    <div class="card"><div class="lbl">Brk Factor</div><div class="val" id="prb">--</div></div>
   </div>
 
   <div class="panel">
@@ -41,50 +43,34 @@
     <p>Max Push Force (A): <input type="number" step="0.1" id="tm"></p>
     <p>Brake Smoothing: <input type="number" step="0.01" id="ba"></p>
     <button onclick="saveSettings()">Save Tuning</button>
-    
     <hr style="border-color:#333; margin:15px 0;">
-    <button class="danger" onclick="sendCommand('SCAN')">Scan for new BLE Cadence Sensor</button>
-    <button class="danger" style="background:#ff9500" onclick="sendCommand('OTA')">Enable Maintenance Mode (OTA Updates)</button>
+    <button class="danger" onclick="sendCommand('SCAN')">Scan for new BLE Sensor</button>
+    <button class="danger" style="background:#ff9500" onclick="sendCommand('OTA')">Enable Maintenance Mode</button>
   </div>
 
   <script>
     const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
     const TX_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
     const RX_UUID = "828917c1-ea55-4d4a-a66e-fd202cea0645";
-    const LOG_UUID = "5111b1db-2917-48f8-b3d5-e51c8f35fc06"; // NEW: Dedicated Log Channel!
-    
+    const LOG_UUID = "5111b1db-2917-48f8-b3d5-e51c8f35fc06";
     let bleRxChar = null;
 
     async function connectBLE() {
       try {
-        const device = await navigator.bluetooth.requestDevice({
-          filters:[{ name: 'E-Bike Pusher' }],
-          optionalServices: [SERVICE_UUID]
-        });
-        
+        const device = await navigator.bluetooth.requestDevice({ filters:[{ name: 'E-Bike Pusher' }], optionalServices: [SERVICE_UUID] });
         document.getElementById("connectBtn").innerText = "Connecting...";
         const server = await device.gatt.connect();
         const service = await server.getPrimaryService(SERVICE_UUID);
-        
         bleRxChar = await service.getCharacteristic(RX_UUID);
         const txChar = await service.getCharacteristic(TX_UUID);
         const logChar = await service.getCharacteristic(LOG_UUID);
-        
-        // Subscribe to Telemetry
         await txChar.startNotifications();
         txChar.addEventListener('characteristicvaluechanged', handleTelemetry);
-
-        // Subscribe to Live Logs
         await logChar.startNotifications();
         logChar.addEventListener('characteristicvaluechanged', handleLiveLog);
-        
         document.getElementById("connectBtn").innerText = "Connected!";
         document.getElementById("connectBtn").style.background = "#00ea8d";
-      } catch(e) {
-        console.error(e);
-        alert("Connection Failed. Make sure your phone's Bluetooth is on!");
-        document.getElementById("connectBtn").innerText = "Connect to Bike";
-      }
+      } catch(e) { alert("Connection Failed."); document.getElementById("connectBtn").innerText = "Connect to Bike"; }
     }
 
     function handleTelemetry(event) {
@@ -92,12 +78,13 @@
       try {
         const d = JSON.parse(value);
         document.getElementById("cad").innerText = d.c;
-        document.getElementById("pwr").innerText = d.p.toFixed(1);
-        document.getElementById("prb").innerText = d.pr;
+        document.getElementById("pwr").innerText = d.p.toFixed(0);
+        document.getElementById("vol").innerText = d.v.toFixed(1);
+        document.getElementById("amp").innerText = d.a.toFixed(1);
+        document.getElementById("prb").innerText = d.pr.toFixed(2);
         
         let bs = document.getElementById("b_stat");
-        if(d.b) { bs.innerText = "BRAKING"; bs.classList.add("alert"); } 
-        else { bs.innerText = "COAST"; bs.classList.remove("alert"); }
+        if(d.b) { bs.innerText = "BRAKING"; bs.classList.add("alert"); } else { bs.innerText = "COAST"; bs.classList.remove("alert"); }
         
         if (document.activeElement !== document.getElementById('th')) document.getElementById("th").value = d.th;
         if (document.activeElement !== document.getElementById('ti')) document.getElementById("ti").value = d.ti;
@@ -106,27 +93,19 @@
       } catch(e) {}
     }
 
-    // Instantly append new incoming logs to the text box!
     function handleLiveLog(event) {
       const msg = new TextDecoder().decode(event.target.value);
       let logbox = document.getElementById("syslog");
       logbox.value += msg + "\n";
-      logbox.scrollTop = logbox.scrollHeight; // Auto-scroll to bottom
+      logbox.scrollTop = logbox.scrollHeight;
     }
 
-    async function sendCommand(cmd) {
-      if (!bleRxChar) return alert("Connect via Bluetooth first!");
-      let encoder = new TextEncoder();
-      await bleRxChar.writeValue(encoder.encode(cmd));
-      if (cmd === 'OTA' || cmd === 'SCAN') alert("Command Sent! ESP32 Rebooting...");
-    }
-
+    async function sendCommand(cmd) { if (!bleRxChar) return; let encoder = new TextEncoder(); await bleRxChar.writeValue(encoder.encode(cmd)); }
     function saveSettings() {
       sendCommand("SET:th:" + document.getElementById("th").value);
       setTimeout(() => sendCommand("SET:ti:" + document.getElementById("ti").value), 100);
       setTimeout(() => sendCommand("SET:tm:" + document.getElementById("tm").value), 200);
       setTimeout(() => sendCommand("SET:ba:" + document.getElementById("ba").value), 300);
-      alert("Settings sent to Bike!");
     }
   </script>
 </body>
