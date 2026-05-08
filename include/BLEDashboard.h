@@ -3,7 +3,8 @@
 
 #include <Arduino.h>
 
-struct DeviceInfo {
+struct DeviceInfo
+{
   char macAddress[18];
   char deviceName[20];
   uint8_t addressType;
@@ -17,7 +18,7 @@ struct DeviceInfo {
 };
 extern DeviceInfo deviceInfo;
 
-void addLog(const char* msg);
+void addLog(const char *msg);
 
 void dash_begin();
 void dash_loop();
