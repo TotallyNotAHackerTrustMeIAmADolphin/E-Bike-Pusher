@@ -93,13 +93,13 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
             }
             else if (rxValue == "GET") {
                 char msg[200];
-                snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"ti\":%d,\"tm\":%.3f,\"ba\":%.2f}",
-                         deviceInfo.brakingThreshold, deviceInfo.brakingTimeout, deviceInfo.torqueMultiplier, deviceInfo.brakeAlpha);
+                snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"ti\":%d,\"tm\":%.3f,\"ba\":%.2f,\"s\":\"%s\",\"p\":\"%s\"}",
+                         deviceInfo.brakingThreshold, deviceInfo.brakingTimeout, deviceInfo.torqueMultiplier, 
+                         deviceInfo.brakeAlpha, deviceInfo.home_ssid, deviceInfo.home_pass);
                 pTxCharacteristic->setValue(msg);
                 pTxCharacteristic->notify();
             }
             else if (rxValue.startsWith("CFG:")) {
-                // Parse single string: CFG:th:ti:tm:ba
                 int s1 = rxValue.indexOf(':', 4);
                 int s2 = rxValue.indexOf(':', s1 + 1);
                 int s3 = rxValue.indexOf(':', s2 + 1);
@@ -110,15 +110,31 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
                     deviceInfo.torqueMultiplier = rxValue.substring(s2 + 1, s3).toFloat();
                     deviceInfo.brakeAlpha = rxValue.substring(s3 + 1).toFloat();
                     
-                    // NO EEPROM COMMIT HERE! LIVE RAM TUNING ONLY!
                     addLog("Live Tune Applied (Not Saved)");
                 }
             }
             else if (rxValue == "SAVE") {
-                // EXPLICIT EEPROM COMMIT COMMAND!
                 EEPROM.put(EEPROM_ADDRESS, deviceInfo); 
                 EEPROM.commit(); 
                 addLog("Tune permanently saved to EEPROM!");
+            }
+            else if (rxValue.startsWith("WIFI:")) {
+                // Parse single string: WIFI:SSID:PASSWORD
+                int sep1 = rxValue.indexOf(':');
+                int sep2 = rxValue.indexOf(':', sep1 + 1);
+                
+                if(sep1 > 0 && sep2 > 0) {
+                    String s = rxValue.substring(sep1 + 1, sep2);
+                    String p = rxValue.substring(sep2 + 1);
+                    
+                    strlcpy(deviceInfo.home_ssid, s.c_str(), sizeof(deviceInfo.home_ssid));
+                    strlcpy(deviceInfo.home_pass, p.c_str(), sizeof(deviceInfo.home_pass));
+                    EEPROM.put(EEPROM_ADDRESS, deviceInfo); 
+                    EEPROM.commit();
+                    
+                    addLog("WiFi Saved! Rebooting...");
+                    delay(500); ESP.restart();
+                }
             }
         }
     }

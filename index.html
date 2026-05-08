@@ -38,13 +38,17 @@
 
   <div class="panel">
     <h3 style="margin-top:0; color:#aaa;">Live Tuning & Settings</h3>
-    <!-- Notice the new onchange="sendTuning()" events! -->
     <p>Brake Threshold: <input type="number" id="th" onchange="sendTuning()"></p>
     <p>Timeout (ms): <input type="number" id="ti" onchange="sendTuning()"></p>
     <p>Max Push Force (A): <input type="number" step="0.1" id="tm" onchange="sendTuning()"></p>
     <p>Brake Smoothing: <input type="number" step="0.01" id="ba" onchange="sendTuning()"></p>
     <button onclick="commitSettings()">Save to EEPROM</button>
     
+    <hr style="border-color:#333; margin:15px 0;">
+    <p style="width: 100%;">Home SSID: <input type="text" id="ssid" style="width: 150px;"></p>
+    <p style="width: 100%;">Home Pass: <input type="password" id="psk" style="width: 150px;"></p>
+    <button onclick="saveWiFi()">Save WiFi & Reboot</button>
+
     <hr style="border-color:#333; margin:15px 0;">
     <button class="danger" onclick="sendCommand('SCAN')">Scan for new BLE Sensor</button>
     <button class="danger" style="background:#ff9500" onclick="sendCommand('OTA')">Enable Maintenance Mode</button>
@@ -96,6 +100,8 @@
           document.getElementById("ti").value = d.ti;
           document.getElementById("tm").value = d.tm.toFixed(2);
           document.getElementById("ba").value = d.ba.toFixed(2);
+          document.getElementById("ssid").value = d.s;
+          document.getElementById("psk").value = d.p;
           return;
         }
 
@@ -119,7 +125,6 @@
 
     async function sendCommand(cmd) { if (!bleRxChar) return; let encoder = new TextEncoder(); await bleRxChar.writeValue(encoder.encode(cmd)); }
     
-    // NEW: Instantly send live parameters without saving
     function sendTuning() {
       let th = document.getElementById("th").value;
       let ti = document.getElementById("ti").value;
@@ -128,10 +133,16 @@
       sendCommand(`CFG:${th}:${ti}:${tm}:${ba}`);
     }
 
-    // NEW: Explicit EEPROM Commit
     function commitSettings() {
       sendCommand("SAVE");
       alert("Tuning locked into EEPROM!");
+    }
+
+    function saveWiFi() {
+      let ssid = document.getElementById("ssid").value;
+      let psk = document.getElementById("psk").value;
+      sendCommand("WIFI:" + ssid + ":" + psk);
+      alert("WiFi Saved! Rebooting...");
     }
   </script>
 </body>
