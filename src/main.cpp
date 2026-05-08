@@ -122,11 +122,18 @@ void setup() {
 
   dash_begin();
   
+  // --- ODRIVE BOOT SEQUENCE ---
   odrive.begin(CAN_TX_PIN, CAN_RX_PIN);
-  odrive.setMode(1, 1); 
+  delay(250); // CRITICAL: Give the physical CAN transceiver time to boot!
+  
+  odrive.setTorque(0.0);   // Force 0 torque
+  odrive.setVelocity(0.0); // Force 0 velocity just in case
   delay(10);
-  odrive.setState(8); 
-  odrive.setTorque(0.0); // Safety explicitly set torque 0 before loop
+  
+  odrive.setMode(1, 1);    // 1 = Torque Control, 1 = Passthrough
+  delay(50);               // Let the ODrive process the mode change
+  
+  odrive.setState(8);      // NOW it is safe to enter Closed Loop!
 
   cadenceSensor.begin(deviceInfo.SCAN_FOR_DEVICE, deviceInfo.macAddress, deviceInfo.addressType);
 }

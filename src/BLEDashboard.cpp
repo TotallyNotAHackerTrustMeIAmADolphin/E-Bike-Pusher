@@ -17,6 +17,7 @@ bool deviceConnected = false;
 bool restartAdvertising = false;
 char log_buffer[1024] = "System Booting...\n";
 
+// NEW: Safely add to memory, but DO NOT transmit here to prevent threading crashes!
 void addLog(const char* msg) {
   Serial.println(msg);
   int msg_len = strlen(msg);
@@ -28,23 +29,19 @@ void addLog(const char* msg) {
     if (shift >= cur_len) { log_buffer[0] = '\0'; cur_len = 0; } 
     else { memmove(log_buffer, log_buffer + shift, cur_len - shift + 1); cur_len -= shift; }
   }
-  strcat(log_buffer, msg); strcat(log_buffer, "\n");
-
-  if (deviceConnected && pLogCharacteristic != NULL) {
-    pLogCharacteristic->setValue((uint8_t*)msg, strlen(msg));
-    pLogCharacteristic->notify();
-  }
+  strcat(log_buffer, msg); 
+  strcat(log_buffer, "\n");
 }
 
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) { 
       deviceConnected = true; 
-      addLog("Phone Dashboard Connected!");
+      Serial.println("[BLE] Phone Connected!");
     }
     void onDisconnect(BLEServer* pServer) { 
         deviceConnected = false; 
         restartAdvertising = true; 
-        Serial.println("[BLE] Dashboard Disconnected!");
+        Serial.println("[BLE] Phone Disconnected!");
     }
 };
 
@@ -52,6 +49,8 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         String rxValue = pCharacteristic->getValue().c_str();
         if (rxValue.length() > 0) {
+            Serial.print("BLE RX: "); Serial.println(rxValue);
+            
             if (rxValue == "OTA") triggerOTA();
             else if (rxValue == "SCAN") triggerScan();
             else if (rxValue == "SAVE") triggerEEPROMSave();
@@ -70,7 +69,7 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
                     deviceInfo.brakingTimeout = rxValue.substring(s1 + 1, s2).toInt();
                     deviceInfo.torqueMultiplier = rxValue.substring(s2 + 1, s3).toFloat();
                     deviceInfo.brakeAlpha = rxValue.substring(s3 + 1).toFloat();
-                    addLog("Live Tune Applied (Not Saved)");
+                    Serial.println("RAM settings updated!");
                 }
             }
             else if (rxValue.startsWith("WIFI:")) {
@@ -83,7 +82,7 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
 
 void dash_begin() {
   BLEDevice::init("E-Bike Pusher");
-  BLEDevice::setMTU(512);
+  BLEDevice::setMTU(256); // A safer MTU size for all phones
 
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
@@ -104,8 +103,9 @@ void dash_begin() {
 }
 
 void dash_loop() {
+  // Safely restart advertising in the main loop thread!
   if (restartAdvertising) {
-    delay(500);
+    delay(200);
     pServer->startAdvertising();
     Serial.println("[BLE] Advertising Restarted.");
     restartAdvertising = false;
@@ -114,7 +114,7 @@ void dash_loop() {
 
 void dash_sendTelemetry(int cadence, float power, float voltage, float current, float brake_avg, bool isBraking) {
   if (deviceConnected) {
-    char json[100];
+    char json[120];
     snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"a\":%.1f,\"pr\":%.2f,\"b\":%d}", 
              cadence, power, voltage, current, brake_avg, isBraking?1:0);
     pTxCharacteristic->setValue((uint8_t*)json, strlen(json));
