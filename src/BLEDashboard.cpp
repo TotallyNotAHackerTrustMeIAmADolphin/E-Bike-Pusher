@@ -83,7 +83,6 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
         triggerEEPROMSave();
       else if (rxValue == "GET")
       {
-        // MATCHES THE NEW HTML!
         char msg[200];
         snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"tm\":%.2f,\"tc\":%.2f,\"s\":\"%s\",\"p\":\"%s\"}",
                  deviceInfo.brakingThreshold, deviceInfo.torqueMultiplier,
@@ -93,43 +92,17 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
       }
       else if (rxValue.startsWith("CFG:"))
       {
-        // MATCHES THE NEW HTML: CFG:th:tm:tc
-        int s1 = rxValue.indexOf(':', 4);
-        int s2 = rxValue.indexOf(':', s1 + 1);
-
+        int s1 = rxValue.indexOf(':', 4), s2 = rxValue.indexOf(':', s1 + 1);
         if (s1 > 0 && s2 > 0)
         {
-          int new_th = rxValue.substring(4, s1).toInt();
-          float new_tm = rxValue.substring(s1 + 1, s2).toFloat();
-          float new_tc = rxValue.substring(s2 + 1).toFloat();
-
-          if (new_th != deviceInfo.brakingThreshold)
-          {
-            char m[64];
-            snprintf(m, sizeof(m), "Tuning: Threshold %d -> %d", deviceInfo.brakingThreshold, new_th);
-            addLog(m);
-            deviceInfo.brakingThreshold = new_th;
-          }
-          if (new_tm != deviceInfo.torqueMultiplier)
-          {
-            char m[64];
-            snprintf(m, sizeof(m), "Tuning: Max Force %.2fA -> %.2fA", deviceInfo.torqueMultiplier, new_tm);
-            addLog(m);
-            deviceInfo.torqueMultiplier = new_tm;
-          }
-          if (new_tc != deviceInfo.brakeTimeConstant)
-          {
-            char m[64];
-            snprintf(m, sizeof(m), "Tuning: Filter Time %.2fs -> %.2fs", deviceInfo.brakeTimeConstant, new_tc);
-            addLog(m);
-            deviceInfo.brakeTimeConstant = new_tc;
-          }
+          deviceInfo.brakingThreshold = rxValue.substring(4, s1).toInt();
+          deviceInfo.torqueMultiplier = rxValue.substring(s1 + 1, s2).toFloat();
+          deviceInfo.brakeTimeConstant = rxValue.substring(s2 + 1).toFloat();
         }
       }
       else if (rxValue.startsWith("WIFI:"))
       {
-        int s1 = rxValue.indexOf(':');
-        int s2 = rxValue.indexOf(':', s1 + 1);
+        int s1 = rxValue.indexOf(':'), s2 = rxValue.indexOf(':', s1 + 1);
         if (s1 > 0 && s2 > 0)
           triggerWiFiSave(rxValue.substring(s1 + 1, s2), rxValue.substring(s2 + 1));
       }
@@ -140,6 +113,8 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
 void dash_begin()
 {
   NimBLEDevice::init("E-Bike Pusher");
+  NimBLEDevice::setMTU(256); // THE FIX: Gives us 256 bytes per packet instead of 20!
+
   pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
   NimBLEService *pService = pServer->createService(SERVICE_UUID);

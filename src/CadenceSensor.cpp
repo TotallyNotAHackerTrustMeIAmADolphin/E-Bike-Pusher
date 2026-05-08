@@ -48,6 +48,7 @@ CadenceSensor::CadenceSensor()
   _isScanning = false;
   _scanFinished = false;
   _isConnecting = false;
+  _spamGuard = false;
   _cadence = 0;
   _lastEventTime = 0;
   _prevCumulativeCrankRev = 0;
@@ -62,14 +63,11 @@ void CadenceSensor::begin(bool scanMode, const char *savedMac, uint8_t savedType
   _scanMode = scanMode;
   _targetMac = String(savedMac);
   _targetType = savedType;
+  _spamGuard = false;
 
   _scanner = NimBLEDevice::getScan();
   _scanner->setAdvertisedDeviceCallbacks(new MyScanCallback());
   _scanner->setActiveScan(true);
-
-  // THE FIX: Relax the scanner duty cycle!
-  // 100ms interval, 40ms window = 40% duty cycle.
-  // Leaves 60% of the radio free for the Dashboard!
   _scanner->setInterval(100);
   _scanner->setWindow(40);
 }
@@ -84,7 +82,6 @@ void CadenceSensor::loop()
 {
   static unsigned long last_connect_attempt = 0;
 
-  // 1. Process Finished Scans (Main Thread)
   if (_scanFinished)
   {
     _scanFinished = false;
@@ -96,19 +93,23 @@ void CadenceSensor::loop()
     }
     else
     {
-      if (!_scanMode)
-        addLog("Sensor asleep. Spin crank to wake it up!");
+      if (!_spamGuard)
+      {
+        if (!_scanMode)
+          addLog("Sensor asleep. Spin crank to wake it up!");
+        else
+          addLog("No new sensor found. Still looking...");
+        _spamGuard = true;
+      }
     }
     last_connect_attempt = millis();
   }
 
-  // 2. Start new scans if needed
   if (!_connected && !_isScanning && !_isConnecting && (millis() - last_connect_attempt > 4000))
   {
     last_connect_attempt = millis();
     _isScanning = true;
 
-    // THE FIX: Explicitly flush the old results to prevent internal memory leaks!
     _scanner->clearResults();
 
     if (_foundDevice != nullptr)
@@ -117,15 +118,17 @@ void CadenceSensor::loop()
       _foundDevice = nullptr;
     }
 
-    if (_scanMode)
-      addLog("Scanning for ANY Cadence Sensor...");
-    else
-      addLog("Searching for saved Cadence Sensor...");
+    if (!_spamGuard)
+    {
+      if (_scanMode)
+        addLog("Scanning for ANY Cadence Sensor...");
+      else
+        addLog("Searching for saved Cadence Sensor...");
+    }
 
     _scanner->start(2, scanEndedCB, false);
   }
 
-  // 3. Cadence Timeout Logic
   if (_cadence > 0 && (millis() - _lastEventTime > 2000))
   {
     _cadence = 0;
@@ -162,10 +165,12 @@ bool CadenceSensor::connectToServer()
       NimBLERemoteCharacteristic *sensorChar = remoteService->getCharacteristic(notifyUUID);
       if (sensorChar)
       {
-        if (sensorChar->canNotify())
-        {
-          sensorChar->subscribe(true, notifyCallback);
-        }
+        sensorChar->subscribe(true, notifyCallback);
+        addLog("Subscribed to Cadence Data!");
+      }
+      else
+      {
+        addLog("Error: Cadence Characteristic not found!");
       }
     }
   }
@@ -200,6 +205,8 @@ void CadenceSensor::_onConnect()
 {
   addLog("Cadence Sensor Connected!");
   _connected = true;
+  _spamGuard = false;
+
   if (_scanMode)
   {
     _scanMode = false;
@@ -214,6 +221,7 @@ void CadenceSensor::_onDisconnect()
 {
   addLog("Cadence Sensor Disconnected!");
   _connected = false;
+  _spamGuard = false;
 }
 
 void CadenceSensor::_onNotify(uint8_t *data, size_t length)

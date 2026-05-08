@@ -33,8 +33,9 @@ private:
   bool _connected;
   bool _newDeviceFound;
   bool _isScanning;
-  bool _scanFinished; // <--- NEW: Thread safety flag
-  bool _isConnecting; // <--- NEW: Thread safety flag
+  bool _scanFinished;
+  bool _isConnecting;
+  bool _spamGuard; // <--- Restored this!
 
   String _targetMac;
   uint8_t _targetType;
@@ -55,4 +56,5 @@ private:
 
   bool connectToServer();
 };
+
 #endif
