@@ -2,13 +2,12 @@
 #define BLE_DASHBOARD_H
 
 #include <Arduino.h>
-#include <esp_bt_defs.h>
 
-// Global Struct so all files can read it
+// Global Struct blueprint so all files can read it
 struct DeviceInfo {
   char macAddress[18];
   char deviceName[20];
-  esp_ble_addr_type_t addressType;
+  uint8_t addressType;  // <--- THE NIMBLE FIX!
   bool SCAN_FOR_DEVICE;
   int brakingThreshold;
   int brakingTimeout;

@@ -9,7 +9,7 @@
 
 ODriveCAN odrive(0);
 CadenceSensor cadenceSensor;
-DeviceInfo deviceInfo; 
+DeviceInfo deviceInfo; // The struct definition lives cleanly in BLEDashboard.h!
 
 #define EEPROM_SIZE 256
 constexpr int EEPROM_ADDRESS = 0;
@@ -122,18 +122,14 @@ void setup() {
 
   dash_begin();
   
-  // --- ODRIVE BOOT SEQUENCE (Safe Order of Operations) ---
   odrive.begin(CAN_TX_PIN, CAN_RX_PIN);
-  delay(250); // Let the physical CAN transceiver boot up
-  
-  odrive.setMode(1, 1);    // 1. Set Torque Mode first!
-  delay(50);               // Let the ODrive process the mode change
-  
-  odrive.setTorque(0.0);   // 2. Command 0.0 Torque
-  odrive.setVelocity(0.0); // 3. Command 0.0 Velocity (Failsafe)
+  delay(250);
+  odrive.setMode(1, 1); 
+  delay(50);
+  odrive.setTorque(0.0); 
+  odrive.setVelocity(0.0); 
   delay(10);
-  
-  odrive.setState(8);      // 4. NOW it is safe to enter Closed Loop!
+  odrive.setState(8); 
 
   cadenceSensor.begin(deviceInfo.SCAN_FOR_DEVICE, deviceInfo.macAddress, deviceInfo.addressType);
 }
@@ -160,12 +156,9 @@ void loop() {
     addLog("Cadence Sensor paired & saved!");
   }
 
-  // --- MOTOR CONTROL (50Hz) ---
   if (millis() - last_cmd_time >= 20) {
     last_cmd_time = millis();
     
-    // NOTE: Because we enabled the ODrive Watchdog, this 50Hz CAN message 
-    // keeps the motor alive! If ESP32 crashes, it will stop automatically.
     float target_motor_torque = 0.0;
 
     if (!isBraking && cadenceSensor.getCadence() > 0) {
@@ -178,11 +171,9 @@ void loop() {
     odrive.requestData(CMD_GET_VBUS_VOLTAGE); 
   }
 
-  // --- BLUETOOTH DASHBOARD NOTIFY (2Hz) ---
   if (millis() - last_dashboard_time >= 500) {
     last_dashboard_time = millis();
     float mech_power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
-    
     dash_sendTelemetry(cadenceSensor.getCadence(), mech_power, odrive.getVoltage(), odrive.getCurrent(), brake_avg, isBraking);
   }
 }

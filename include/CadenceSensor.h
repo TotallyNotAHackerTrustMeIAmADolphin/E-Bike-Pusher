@@ -2,14 +2,14 @@
 #define CADENCE_SENSOR_H
 
 #include <Arduino.h>
-#include <NimBLEDevice.h> // <--- NEW LIBRARY
+#include <NimBLEDevice.h>
 
 extern void addLog(const char* msg);
 
 class CadenceSensor {
   public:
     CadenceSensor();
-    void begin(bool scanMode, const char* savedMac, esp_ble_addr_type_t savedType);
+    void begin(bool scanMode, const char* savedMac, uint8_t savedType); // <-- NIMBLE FIX
     void loop();
     
     int getCadence();
@@ -18,7 +18,7 @@ class CadenceSensor {
     bool foundNewDevice();
     const char* getNewMac();
     const char* getNewName();
-    esp_ble_addr_type_t getNewAddressType();
+    uint8_t getNewAddressType(); // <-- NIMBLE FIX
     void clearNewDeviceFlag();
 
     void _onNotify(uint8_t* data, size_t length);
@@ -31,13 +31,13 @@ class CadenceSensor {
     bool _scanMode;
     bool _connected;
     bool _newDeviceFound;
-    bool _isScanning; // <--- Prevents blocking!
+    bool _isScanning; 
     
     String _targetMac;
-    esp_ble_addr_type_t _targetType;
+    uint8_t _targetType; // <-- NIMBLE FIX
     String _newName;
     String _newMac;
-    esp_ble_addr_type_t _newType;
+    uint8_t _newType; // <-- NIMBLE FIX
 
     NimBLEClient* _client;
     NimBLEScan* _scanner;

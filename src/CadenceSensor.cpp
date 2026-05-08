@@ -18,7 +18,6 @@ class MyScanCallback : public NimBLEAdvertisedDeviceCallbacks {
   void onResult(NimBLEAdvertisedDevice* dev) { if (globalSensorInstance) globalSensorInstance->_onScanResult(dev); }
 };
 
-// NEW: Callback when the background scan finishes
 void scanEndedCB(NimBLEScanResults results) {
   if (globalSensorInstance) globalSensorInstance->_onScanComplete();
 }
@@ -37,7 +36,7 @@ CadenceSensor::CadenceSensor() {
   _foundDevice = nullptr;
 }
 
-void CadenceSensor::begin(bool scanMode, const char* savedMac, esp_ble_addr_type_t savedType) {
+void CadenceSensor::begin(bool scanMode, const char* savedMac, uint8_t savedType) {
   _scanMode = scanMode;
   _targetMac = String(savedMac);
   _targetType = savedType;
@@ -52,7 +51,6 @@ void CadenceSensor::begin(bool scanMode, const char* savedMac, esp_ble_addr_type
 void CadenceSensor::loop() {
   static unsigned long last_connect_attempt = 0;
 
-  // ONLY start a scan if we aren't already scanning! (NON-BLOCKING)
   if (!_connected && !_isScanning && (millis() - last_connect_attempt > 4000)) {
     last_connect_attempt = millis();
     _isScanning = true;
@@ -65,11 +63,9 @@ void CadenceSensor::loop() {
     if (_scanMode) addLog("Scanning for ANY Cadence Sensor...");
     else addLog("Searching for saved Cadence Sensor...");
 
-    // Start background scan (Runs for 2 seconds, triggers scanEndedCB when done)
     _scanner->start(2, scanEndedCB, false); 
   }
 
-  // Timeout Logic
   if (_cadence > 0 && (millis() - _lastEventTime > 2000)) {
     _cadence = 0;
     _prevRPM = 0.0;
@@ -77,7 +73,7 @@ void CadenceSensor::loop() {
 }
 
 void CadenceSensor::_onScanComplete() {
-  _isScanning = false; // Scan finished!
+  _isScanning = false; 
   if (_foundDevice != nullptr) {
     connectToServer();
   } else {
@@ -91,16 +87,21 @@ bool CadenceSensor::connectToServer() {
     _client->setClientCallbacks(new MyClientCallback());
   }
 
-  if (_foundDevice == nullptr) return false;
-
-  addLog("Device Found! Connecting...");
-  bool result = _client->connect(_foundDevice); 
+  bool result = false;
+  if (_scanMode && _foundDevice != nullptr) {
+    addLog("Device Found! Connecting...");
+    result = _client->connect(_foundDevice); 
+  } else if (!_scanMode && _targetMac.length() == 17) {
+    addLog("Connecting to saved sensor...");
+    NimBLEAddress savedAddr(_targetMac.c_str(), _targetType);
+    result = _client->connect(savedAddr);
+  }
 
   if (result) {
     NimBLERemoteService* remoteService = _client->getService(serviceUUID);
     if (remoteService) {
       NimBLERemoteCharacteristic* sensorChar = remoteService->getCharacteristic(notifyUUID);
-      if (sensorChar) sensorChar->subscribe(true, notifyCallback); // NimBLE simplified subscription!
+      if (sensorChar) sensorChar->subscribe(true, notifyCallback); 
     }
   } else {
     addLog("BLE Connection failed. Retrying...");
@@ -128,7 +129,7 @@ void CadenceSensor::_onConnect() {
     _newDeviceFound = true; 
     _newMac = String(_foundDevice->getAddress().toString().c_str());
     _newName = String(_foundDevice->getName().c_str());
-    _newType = (esp_ble_addr_type_t)_foundDevice->getAddressType();
+    _newType = _foundDevice->getAddress().getType(); // <-- NIMBLE FIX
   }
 }
 
@@ -163,5 +164,5 @@ bool CadenceSensor::isConnected() { return _connected; }
 bool CadenceSensor::foundNewDevice() { return _newDeviceFound; }
 const char* CadenceSensor::getNewMac() { return _newMac.c_str(); }
 const char* CadenceSensor::getNewName() { return _newName.c_str(); }
-esp_ble_addr_type_t CadenceSensor::getNewAddressType() { return _newType; }
+uint8_t CadenceSensor::getNewAddressType() { return _newType; } // <-- NIMBLE FIX
 void CadenceSensor::clearNewDeviceFlag() { _newDeviceFound = false; }
