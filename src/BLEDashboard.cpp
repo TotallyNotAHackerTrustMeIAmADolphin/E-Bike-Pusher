@@ -1,5 +1,5 @@
 #include "BLEDashboard.h"
-#include <NimBLEDevice.h> 
+#include <NimBLEDevice.h>
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHAR_TX_UUID        "beb5483e-36e1-4688-b7f5-ea07361b26a8"
@@ -16,7 +16,7 @@ char log_buffer[1024] = "System Booting...\n";
 uint16_t phone_conn_id = 0xFFFF;
 
 void addLog(const char* msg) {
-  Serial.println(msg); // Universally prints to Serial Monitor!
+  Serial.println(msg);
   int msg_len = strlen(msg);
   if (msg_len > 256) return; 
   int cur_len = strlen(log_buffer);
@@ -59,6 +59,7 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks {
             else if (rxValue == "SCAN") triggerScan();
             else if (rxValue == "SAVE") triggerEEPROMSave();
             else if (rxValue == "GET") {
+                // MATCHES THE NEW HTML!
                 char msg[200];
                 snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"tm\":%.2f,\"tc\":%.2f,\"s\":\"%s\",\"p\":\"%s\"}",
                          deviceInfo.brakingThreshold, deviceInfo.torqueMultiplier, 
@@ -67,14 +68,15 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks {
                 pTxCharacteristic->notify();
             }
             else if (rxValue.startsWith("CFG:")) {
-                // Parse single string: CFG:th:tm:tc
-                int s1 = rxValue.indexOf(':', 4), s2 = rxValue.indexOf(':', s1 + 1);
+                // MATCHES THE NEW HTML: CFG:th:tm:tc
+                int s1 = rxValue.indexOf(':', 4);
+                int s2 = rxValue.indexOf(':', s1 + 1);
+                
                 if(s1 > 0 && s2 > 0) {
                     int new_th = rxValue.substring(4, s1).toInt();
                     float new_tm = rxValue.substring(s1 + 1, s2).toFloat();
                     float new_tc = rxValue.substring(s2 + 1).toFloat();
                     
-                    // Identify what changed and log it!
                     if (new_th != deviceInfo.brakingThreshold) {
                         char m[64]; snprintf(m, sizeof(m), "Tuning: Threshold %d -> %d", deviceInfo.brakingThreshold, new_th); addLog(m);
                         deviceInfo.brakingThreshold = new_th;
@@ -90,7 +92,8 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks {
                 }
             }
             else if (rxValue.startsWith("WIFI:")) {
-                int s1 = rxValue.indexOf(':'), s2 = rxValue.indexOf(':', s1 + 1);
+                int s1 = rxValue.indexOf(':');
+                int s2 = rxValue.indexOf(':', s1 + 1);
                 if(s1 > 0 && s2 > 0) triggerWiFiSave(rxValue.substring(s1 + 1, s2), rxValue.substring(s2 + 1));
             }
         }

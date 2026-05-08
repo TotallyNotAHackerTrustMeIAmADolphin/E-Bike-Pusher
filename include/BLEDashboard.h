@@ -10,7 +10,7 @@ struct DeviceInfo {
   bool SCAN_FOR_DEVICE;
   int brakingThreshold;
   float torqueMultiplier;
-  float brakeTimeConstant; // NEW: Replaces Alpha and Timeout! (in seconds)
+  float brakeTimeConstant; // NEW: The Time Filter!
   char home_ssid[32];
   char home_pass[64];
   bool maintenanceMode;

@@ -19,8 +19,8 @@ constexpr int EEPROM_ADDRESS = 0;
 #define inductiveProbe 34 
 #define pullupPowerPin 33 
 
-float brake_avg = 1.0f; // Varies from -1.0 (Active Braking) to 1.0 (Full Throttle)
-float target_motor_torque = 0.0f; // Global tracking for dashboard
+float brake_avg = 1.0f; 
+float target_motor_torque = 0.0f; 
 
 void triggerEEPROMSave() {
   EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
@@ -75,7 +75,7 @@ void setup() {
   if(deviceInfo.brakingThreshold <= 0 || deviceInfo.brakingThreshold > 4096 || isnan(deviceInfo.torqueMultiplier)) {
       deviceInfo.brakingThreshold = 2048; 
       deviceInfo.torqueMultiplier = 5.0; 
-      deviceInfo.brakeTimeConstant = 1.0; // 1.0 Second filter!     
+      deviceInfo.brakeTimeConstant = 1.0;     
       strncpy(deviceInfo.home_ssid, "wlesswg", 31);
       strncpy(deviceInfo.home_pass, "hba.1245", 63);
       deviceInfo.maintenanceMode = false;
@@ -125,29 +125,27 @@ void loop() {
   if (millis() - last_cmd_time >= 20) {
     last_cmd_time = millis();
     
-    // 1. Digital to -1/1 Mapping
     int rawProbe = analogRead(inductiveProbe);
     float target_state = (rawProbe < deviceInfo.brakingThreshold) ? -1.0f : 1.0f;
     
-    // 2. Mathematical Time Constant Smoothing (Low Pass Filter)
+    // Mathematical Time Constant Smoothing (Low Pass Filter)
     float dt = 0.02f; // Loop time (20ms)
     float tau = deviceInfo.brakeTimeConstant;
-    if (tau < 0.01f) tau = 0.01f; // Prevent division by zero
+    if (tau < 0.01f) tau = 0.01f; 
     float alpha = dt / (tau + dt);
     
     brake_avg = (alpha * target_state) + ((1.0f - alpha) * brake_avg);
 
-    // 3. The New Physics Logic!
+    // The New Physics Logic!
     if (brake_avg > 0.0f) {
-        // POSITIVE (Pulling): Push the bike, but ONLY if pedaling!
         if (cadenceSensor.getCadence() > 0) {
             target_motor_torque = deviceInfo.torqueMultiplier * brake_avg;
         } else {
-            target_motor_torque = 0.0f; // Coast if not pedaling
+            target_motor_torque = 0.0f; 
         }
     } else {
-        // NEGATIVE (Pushing): Apply Regen Braking proportionally! (No pedaling required to brake)
-        target_motor_torque = deviceInfo.torqueMultiplier * brake_avg; // Yields a negative target!
+        // Apply Regen Braking proportionally! (No pedaling required to brake)
+        target_motor_torque = deviceInfo.torqueMultiplier * brake_avg;
     }
 
     odrive.setTorque(target_motor_torque);
@@ -160,6 +158,8 @@ void loop() {
   if (millis() - last_dashboard_time >= 500) {
     last_dashboard_time = millis();
     float mech_power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
+    bool isBraking = (brake_avg < 0.0f); // Dashboard turns red if doing active braking
+    
     dash_sendTelemetry(cadenceSensor.getCadence(), mech_power, odrive.getVoltage(), odrive.getCurrent(), brake_avg, target_motor_torque);
   }
 }
