@@ -64,55 +64,32 @@
 
     async function connectBLE() {
       try {
-        console.log("Requesting BLE Device...");
-        bleDevice = await navigator.bluetooth.requestDevice({ 
-          filters:[{ name: 'E-Bike Pusher' }], 
-          optionalServices:[SERVICE_UUID] 
-        });
-        
-        // Listen for the device dropping the connection!
+        bleDevice = await navigator.bluetooth.requestDevice({ filters:[{ name: 'E-Bike Pusher' }], optionalServices:[SERVICE_UUID] });
         bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
-
         document.getElementById("connectBtn").innerText = "Connecting...";
-        console.log("Connecting to GATT Server...");
-        const server = await bleDevice.gatt.connect();
         
-        console.log("Getting Services...");
+        const server = await bleDevice.gatt.connect();
         const service = await server.getPrimaryService(SERVICE_UUID);
         
-        console.log("Getting Characteristics...");
         bleRxChar = await service.getCharacteristic(RX_UUID);
         const txChar = await service.getCharacteristic(TX_UUID);
         const logChar = await service.getCharacteristic(LOG_UUID);
         
-        console.log("Subscribing to Telemetry...");
         await txChar.startNotifications();
         txChar.addEventListener('characteristicvaluechanged', handleTelemetry);
-        
-        console.log("Subscribing to Logs...");
         await logChar.startNotifications();
         logChar.addEventListener('characteristicvaluechanged', handleLiveLog);
         
         document.getElementById("connectBtn").innerText = "Connected!";
         document.getElementById("connectBtn").style.background = "#00ea8d";
-
         setTimeout(() => sendCommand("GET"), 500);
-        console.log("Connection Complete!");
-
-      } catch(e) { 
-        console.error("BLE Error: ", e);
-        alert("Connection Failed. Check browser console for details."); 
-        document.getElementById("connectBtn").innerText = "Connect to Bike"; 
-      }
+      } catch(e) { document.getElementById("connectBtn").innerText = "Connect to Bike"; }
     }
 
     function onDisconnected(event) {
-      console.log("Bluetooth Connection Dropped!");
       document.getElementById("connectBtn").innerText = "Connect to Bike";
       document.getElementById("connectBtn").style.background = "#00d2ff";
       bleRxChar = null;
-      
-      // Wipe the telemetry so we know it's dead
       document.getElementById("cad").innerText = "--";
       document.getElementById("pwr").innerText = "--";
       document.getElementById("b_stat").innerText = "DISCONNECTED";
@@ -151,24 +128,24 @@
 
     async function sendCommand(cmd) { if (!bleRxChar) return; let encoder = new TextEncoder(); await bleRxChar.writeValue(encoder.encode(cmd)); }
     
+    // NEW: DEBOUNCE TIMER TO PREVENT BLE CRASHES!
+    let tuneTimer;
     function sendTuning() {
-      let th = document.getElementById("th").value;
-      let ti = document.getElementById("ti").value;
-      let tm = document.getElementById("tm").value;
-      let ba = document.getElementById("ba").value;
-      sendCommand(`CFG:${th}:${ti}:${tm}:${ba}`);
+      clearTimeout(tuneTimer);
+      tuneTimer = setTimeout(() => {
+        let th = document.getElementById("th").value;
+        let ti = document.getElementById("ti").value;
+        let tm = document.getElementById("tm").value;
+        let ba = document.getElementById("ba").value;
+        sendCommand(`CFG:${th}:${ti}:${tm}:${ba}`);
+      }, 500); // Waits 500ms after you stop typing/clicking to send!
     }
 
-    function commitSettings() {
-      sendCommand("SAVE");
-      alert("Tuning locked into EEPROM!");
-    }
-
+    function commitSettings() { sendCommand("SAVE"); }
     function saveWiFi() {
       let ssid = document.getElementById("ssid").value;
       let psk = document.getElementById("psk").value;
       sendCommand("WIFI:" + ssid + ":" + psk);
-      alert("WiFi Saved! Rebooting...");
     }
   </script>
 </body>
