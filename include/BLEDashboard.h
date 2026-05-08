@@ -3,23 +3,20 @@
 
 #include <Arduino.h>
 
-struct DeviceInfo
-{
+struct DeviceInfo {
   char macAddress[18];
   char deviceName[20];
   uint8_t addressType;
   bool SCAN_FOR_DEVICE;
-  int brakingThreshold;
   float torqueMultiplier;
-  float brakeTimeConstant; // NEW: The Time Filter!
+  float brakeTimeConstant; 
   char home_ssid[32];
   char home_pass[64];
   bool maintenanceMode;
 };
 extern DeviceInfo deviceInfo;
 
-void addLog(const char *msg);
-
+void addLog(const char* msg);
 void dash_begin();
 void dash_loop();
 void dash_sendTelemetry(int cadence, float power, float voltage, float current, float brake_avg, float target_torque);

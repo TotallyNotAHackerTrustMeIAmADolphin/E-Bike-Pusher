@@ -106,32 +106,13 @@
 <body>
   <h2 style="color: #00d2ff; margin-bottom: 5px;">Pusher Dashboard</h2>
   <button id="connectBtn" onclick="connectBLE()">Connect to Bike</button>
-
+  
   <div class="grid">
-    <div class="card">
-      <div class="lbl">Cadence</div>
-      <div class="val" id="cad">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Elec Pwr (W)</div>
-      <div class="val" id="pwr">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Battery (V)</div>
-      <div class="val" id="vol">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Phase (A)</div>
-      <div class="val" id="amp">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Brake Filter</div>
-      <div class="val" id="prb">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Target Tq (A)</div>
-      <div class="val" id="tq">--</div>
-    </div>
+    <div class="card"><div class="lbl">Cadence</div><div class="val" id="cad">--</div></div>
+    <div class="card"><div class="lbl">Pwr (W)</div><div class="val" id="pwr">--</div></div>
+    <div class="card"><div class="lbl">Batt (V)</div><div class="val" id="vol">--</div></div>
+    <div class="card"><div class="lbl">Filter</div><div class="val" id="prb">--</div></div>
+    <div class="card"><div class="lbl">Target (A)</div><div class="val" id="tq">--</div></div>
   </div>
 
   <div class="panel">
@@ -140,112 +121,50 @@
   </div>
 
   <div class="panel">
-    <h3 style="margin-top:0; color:#aaa;">Live Tuning & Settings</h3>
-    <p>Brake Threshold: <input type="number" id="th" oninput="sendTuning()"></p>
+    <h3 style="margin-top:0; color:#aaa;">Live Tuning</h3>
     <p>Max Push Force (A): <input type="number" step="0.1" id="tm" oninput="sendTuning()"></p>
     <p>Filter Time (s): <input type="number" step="0.1" id="tc" oninput="sendTuning()"></p>
-    <button onclick="commitSettings()">Save to EEPROM</button>
-
+    <button onclick="commitSettings()">Save to Flash</button>
     <hr style="border-color:#333; margin:15px 0;">
-    <p style="width: 100%;">Home SSID: <input type="text" id="ssid" style="width: 150px;"></p>
-    <p style="width: 100%;">Home Pass: <input type="password" id="psk" style="width: 150px;"></p>
+    <p>Home SSID: <input type="text" id="ssid"></p>
+    <p>Home Pass: <input type="password" id="psk"></p>
     <button onclick="saveWiFi()">Save WiFi & Reboot</button>
-
     <hr style="border-color:#333; margin:15px 0;">
-    <button class="danger" onclick="sendCommand('SCAN')">Scan for new BLE Sensor</button>
-    <button class="danger" style="background:#ff9500" onclick="sendCommand('OTA')">Enable Maintenance Mode</button>
+    <button class="danger" onclick="sendCommand('SCAN')">Scan New Cadence Sensor</button>
+    <button class="danger" style="background:#ff9500" onclick="sendCommand('OTA')">OTA Mode</button>
   </div>
 
   <script>
-    const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-    const TX_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-    const RX_UUID = "828917c1-ea55-4d4a-a66e-fd202cea0645";
-    const LOG_UUID = "5111b1db-2917-48f8-b3d5-e51c8f35fc06";
-    let bleRxChar = null;
-    let bleDevice = null;
-
-    async function connectBLE() {
-      try {
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'E-Bike Pusher' }],
-          optionalServices: [SERVICE_UUID]
-        });
-        bleDevice.addEventListener('gattserverdisconnected', () => {
-          document.getElementById("connectBtn").innerText = "Connect to Bike";
-          document.getElementById("connectBtn").style.background = "#00d2ff";
-          bleRxChar = null;
-        });
-
-        const server = await bleDevice.gatt.connect();
-        const service = await server.getPrimaryService(SERVICE_UUID);
-        bleRxChar = await service.getCharacteristic(RX_UUID);
-        const txChar = await service.getCharacteristic(TX_UUID);
-        const logChar = await service.getCharacteristic(LOG_UUID);
-
-        await txChar.startNotifications();
-        txChar.addEventListener('characteristicvaluechanged', handleTelemetry);
-        await logChar.startNotifications();
-        logChar.addEventListener('characteristicvaluechanged', (e) => {
-          const msg = new TextDecoder().decode(e.target.value);
-          let lb = document.getElementById("syslog");
-          lb.value += msg + "\n";
-          lb.scrollTop = lb.scrollHeight;
-        });
-
-        document.getElementById("connectBtn").innerText = "Connected!";
-        document.getElementById("connectBtn").style.background = "#00ea8d";
-        setTimeout(() => sendCommand("GET"), 600);
-      } catch (e) { console.log(e); }
-    }
+    // ... (Keep UUIDs and connectBLE) ...
 
     function handleTelemetry(event) {
       const value = new TextDecoder().decode(event.target.value);
       try {
         const d = JSON.parse(value);
-
-        // Populate settings ONLY if the "cfg" flag is present
-        if (d.cfg === 1) {
-          if (d.th !== undefined) document.getElementById("th").value = d.th;
-          if (d.tm !== undefined) document.getElementById("tm").value = d.tm.toFixed(2);
-          if (d.tc !== undefined) document.getElementById("tc").value = d.tc.toFixed(2);
-          if (d.s !== undefined) document.getElementById("ssid").value = d.s;
-          if (d.p !== undefined) document.getElementById("psk").value = d.p;
-          console.log("Settings Loaded from Bike");
+        if (d.cfg) {
+          document.getElementById("tm").value = d.tm.toFixed(2);
+          document.getElementById("tc").value = d.tc.toFixed(2);
+          document.getElementById("ssid").value = d.s;
           return;
         }
-
-        // Standard Telemetry
         document.getElementById("cad").innerText = d.c;
         document.getElementById("pwr").innerText = d.p.toFixed(0);
         document.getElementById("vol").innerText = d.v.toFixed(1);
-        document.getElementById("amp").innerText = d.a.toFixed(1);
         document.getElementById("prb").innerText = d.pr.toFixed(2);
         document.getElementById("tq").innerText = d.tq.toFixed(2);
-
-        let tqElement = document.getElementById("tq");
-        tqElement.style.color = (d.tq < 0) ? "#ff3b30" : "#00ea8d";
-      } catch (e) { }
-    }
-
-    async function sendCommand(cmd) {
-      if (!bleRxChar) return;
-      await bleRxChar.writeValue(new TextEncoder().encode(cmd));
+        document.getElementById("tq").style.color = (d.tq < 0) ? "#ff3b30" : "#00ea8d";
+      } catch(e) {}
     }
 
     function sendTuning() {
-      let th = document.getElementById("th").value;
-      let tm = document.getElementById("tm").value;
-      let tc = document.getElementById("tc").value;
-      sendCommand(`CFG:${th}:${tm}:${tc}`);
+      clearTimeout(window.tuneTimer);
+      window.tuneTimer = setTimeout(() => {
+        let tm = document.getElementById("tm").value;
+        let tc = document.getElementById("tc").value;
+        sendCommand(`CFG:${tm}:${tc}`);
+      }, 500); 
     }
-
-    function commitSettings() { sendCommand("SAVE"); alert("Saved to Flash!"); }
-    function saveWiFi() {
-      let s = document.getElementById("ssid").value;
-      let p = document.getElementById("psk").value;
-      sendCommand(`WIFI:${s}:${p}`);
-      alert("WiFi Saved! Rebooting...");
-    }
+    // ... (Keep saveWiFi, commitSettings, etc.) ...
   </script>
 </body>
 
