@@ -9,7 +9,7 @@ extern void addLog(const char* msg);
 class CadenceSensor {
   public:
     CadenceSensor();
-    void begin(bool scanMode, const char* savedMac, uint8_t savedType); // <-- NIMBLE FIX
+    void begin(bool scanMode, const char* savedMac, uint8_t savedType); 
     void loop();
     
     int getCadence();
@@ -18,7 +18,7 @@ class CadenceSensor {
     bool foundNewDevice();
     const char* getNewMac();
     const char* getNewName();
-    uint8_t getNewAddressType(); // <-- NIMBLE FIX
+    uint8_t getNewAddressType(); 
     void clearNewDeviceFlag();
 
     void _onNotify(uint8_t* data, size_t length);
@@ -32,12 +32,14 @@ class CadenceSensor {
     bool _connected;
     bool _newDeviceFound;
     bool _isScanning; 
+    bool _scanFinished;   // <--- NEW: Thread safety flag
+    bool _isConnecting;   // <--- NEW: Thread safety flag
     
     String _targetMac;
-    uint8_t _targetType; // <-- NIMBLE FIX
+    uint8_t _targetType; 
     String _newName;
     String _newMac;
-    uint8_t _newType; // <-- NIMBLE FIX
+    uint8_t _newType; 
 
     NimBLEClient* _client;
     NimBLEScan* _scanner;

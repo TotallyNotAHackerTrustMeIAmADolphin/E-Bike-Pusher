@@ -27,6 +27,8 @@ CadenceSensor::CadenceSensor() {
   _connected = false;
   _newDeviceFound = false;
   _isScanning = false;
+  _scanFinished = false; 
+  _isConnecting = false; 
   _cadence = 0;
   _lastEventTime = 0;
   _prevCumulativeCrankRev = 0;
@@ -48,10 +50,29 @@ void CadenceSensor::begin(bool scanMode, const char* savedMac, uint8_t savedType
   _scanner->setWindow(99);
 }
 
+void CadenceSensor::_onScanComplete() {
+  _isScanning = false; 
+  _scanFinished = true; // Signal main loop to handle connection safely!
+}
+
 void CadenceSensor::loop() {
   static unsigned long last_connect_attempt = 0;
 
-  if (!_connected && !_isScanning && (millis() - last_connect_attempt > 4000)) {
+  // 1. Process Finished Scans (SAFELY ON MAIN THREAD!)
+  if (_scanFinished) {
+    _scanFinished = false;
+    if (_foundDevice != nullptr) {
+      _isConnecting = true;
+      connectToServer();
+      _isConnecting = false;
+    } else {
+      if (!_scanMode) addLog("Sensor asleep. Spin crank to wake it up!");
+    }
+    last_connect_attempt = millis(); // Reset timer so it doesn't instantly scan again
+  }
+
+  // 2. Start new scans if needed
+  if (!_connected && !_isScanning && !_isConnecting && (millis() - last_connect_attempt > 4000)) {
     last_connect_attempt = millis();
     _isScanning = true;
 
@@ -66,18 +87,10 @@ void CadenceSensor::loop() {
     _scanner->start(2, scanEndedCB, false); 
   }
 
+  // 3. Cadence Timeout Logic
   if (_cadence > 0 && (millis() - _lastEventTime > 2000)) {
     _cadence = 0;
     _prevRPM = 0.0;
-  }
-}
-
-void CadenceSensor::_onScanComplete() {
-  _isScanning = false; 
-  if (_foundDevice != nullptr) {
-    connectToServer();
-  } else {
-    if (!_scanMode) addLog("Sensor asleep. Spin crank to wake it up!");
   }
 }
 
@@ -101,7 +114,11 @@ bool CadenceSensor::connectToServer() {
     NimBLERemoteService* remoteService = _client->getService(serviceUUID);
     if (remoteService) {
       NimBLERemoteCharacteristic* sensorChar = remoteService->getCharacteristic(notifyUUID);
-      if (sensorChar) sensorChar->subscribe(true, notifyCallback); 
+      if (sensorChar) {
+         if(sensorChar->canNotify()) {
+             sensorChar->subscribe(true, notifyCallback);
+         }
+      }
     }
   } else {
     addLog("BLE Connection failed. Retrying...");
@@ -129,7 +146,7 @@ void CadenceSensor::_onConnect() {
     _newDeviceFound = true; 
     _newMac = String(_foundDevice->getAddress().toString().c_str());
     _newName = String(_foundDevice->getName().c_str());
-    _newType = _foundDevice->getAddress().getType(); // <-- NIMBLE FIX
+    _newType = _foundDevice->getAddress().getType(); 
   }
 }
 
@@ -164,5 +181,5 @@ bool CadenceSensor::isConnected() { return _connected; }
 bool CadenceSensor::foundNewDevice() { return _newDeviceFound; }
 const char* CadenceSensor::getNewMac() { return _newMac.c_str(); }
 const char* CadenceSensor::getNewName() { return _newName.c_str(); }
-uint8_t CadenceSensor::getNewAddressType() { return _newType; } // <-- NIMBLE FIX
+uint8_t CadenceSensor::getNewAddressType() { return _newType; } 
 void CadenceSensor::clearNewDeviceFlag() { _newDeviceFound = false; }

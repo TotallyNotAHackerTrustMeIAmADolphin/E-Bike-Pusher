@@ -1,8 +1,6 @@
-// ODriveCAN.cpp
 #include "ODriveCAN.h"
 
 ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0) {}
-
 
 bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin) {
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(tx_pin, rx_pin, TWAI_MODE_NORMAL);
@@ -18,19 +16,28 @@ bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin) {
 }
 
 void ODriveCAN::twai_send(uint32_t cmd_id, uint8_t* data, uint8_t len) {
-  twai_message_t msg = { .extd = 0, .rtr = 0, .data_length_code = len };
+  // THE FIX: Zero initialize first, then set properties safely!
+  twai_message_t msg = {}; 
   msg.identifier = (node_id << 5) | cmd_id;
+  msg.extd = 0;
+  msg.rtr = 0;
+  msg.data_length_code = len;
+  
   memcpy(msg.data, data, len);
   twai_transmit(&msg, 0);
 }
 
 void ODriveCAN::requestData(uint8_t cmd_id) {
-  twai_message_t msg = { .extd = 0, .rtr = 1, .data_length_code = 0 }; 
+  // THE FIX: Zero initialize first!
+  twai_message_t msg = {}; 
   msg.identifier = (node_id << 5) | cmd_id;
+  msg.extd = 0;
+  msg.rtr = 1;
+  msg.data_length_code = 0;
+  
   twai_transmit(&msg, 0);
 }
 
-// Replace your poll() function with this to parse Voltage:
 void ODriveCAN::poll() {
   twai_message_t msg;
   while (twai_receive(&msg, 0) == ESP_OK) {
@@ -45,8 +52,8 @@ void ODriveCAN::poll() {
       } else if (cmd_id == CMD_GET_IQC) {
         memcpy(&odrv_current, &msg.data[4], 4); 
       } else if (cmd_id == CMD_GET_VBUS_VOLTAGE) {
-        memcpy(&odrv_vbus, &msg.data[0], 4); // Voltage is bytes 0-3
-        memcpy(&odrv_ibus, &msg.data[4], 4); // Battery Amps is bytes 4-7
+        memcpy(&odrv_vbus, &msg.data[0], 4);
+        memcpy(&odrv_ibus, &msg.data[4], 4);
       }
     }
   }
