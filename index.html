@@ -15,6 +15,7 @@
     button { background: #00d2ff; color: #000; border: none; padding: 12px; border-radius: 5px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 10px; }
     .danger { background: #ff3b30; color: white; }
     p { margin: 8px 0; clear: both; overflow: hidden; line-height: 24px; font-size: 14px; color: #ddd; }
+    textarea { width: 100%; height: 120px; background: #000; color: #0f0; border: 1px solid #333; padding: 5px; font-family: monospace; font-size: 11px; resize: none; box-sizing: border-box; }
   </style>
 </head>
 <body>
@@ -26,6 +27,11 @@
     <div class="card"><div class="lbl">Cadence (RPM)</div><div class="val" id="cad">--</div></div>
     <div class="card"><div class="lbl">Power (W)</div><div class="val" id="pwr">--</div></div>
     <div class="card"><div class="lbl">Brake Factor</div><div class="val" id="prb">--</div></div>
+  </div>
+
+  <div class="panel">
+    <h3 style="margin-top:0; color:#aaa;">System Log</h3>
+    <textarea id="syslog" readonly></textarea>
   </div>
 
   <div class="panel">
@@ -45,13 +51,14 @@
     const SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
     const TX_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
     const RX_UUID = "828917c1-ea55-4d4a-a66e-fd202cea0645";
+    const LOG_UUID = "5111b1db-2917-48f8-b3d5-e51c8f35fc06"; // NEW: Dedicated Log Channel!
     
     let bleRxChar = null;
 
     async function connectBLE() {
       try {
         const device = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'E-Bike Pusher' }],
+          filters:[{ name: 'E-Bike Pusher' }],
           optionalServices: [SERVICE_UUID]
         });
         
@@ -61,9 +68,15 @@
         
         bleRxChar = await service.getCharacteristic(RX_UUID);
         const txChar = await service.getCharacteristic(TX_UUID);
+        const logChar = await service.getCharacteristic(LOG_UUID);
         
+        // Subscribe to Telemetry
         await txChar.startNotifications();
         txChar.addEventListener('characteristicvaluechanged', handleTelemetry);
+
+        // Subscribe to Live Logs
+        await logChar.startNotifications();
+        logChar.addEventListener('characteristicvaluechanged', handleLiveLog);
         
         document.getElementById("connectBtn").innerText = "Connected!";
         document.getElementById("connectBtn").style.background = "#00ea8d";
@@ -86,12 +99,19 @@
         if(d.b) { bs.innerText = "BRAKING"; bs.classList.add("alert"); } 
         else { bs.innerText = "COAST"; bs.classList.remove("alert"); }
         
-        // Update input boxes if not actively typing
         if (document.activeElement !== document.getElementById('th')) document.getElementById("th").value = d.th;
         if (document.activeElement !== document.getElementById('ti')) document.getElementById("ti").value = d.ti;
         if (document.activeElement !== document.getElementById('tm')) document.getElementById("tm").value = d.tm.toFixed(3);
         if (document.activeElement !== document.getElementById('ba')) document.getElementById("ba").value = d.ba.toFixed(2);
       } catch(e) {}
+    }
+
+    // Instantly append new incoming logs to the text box!
+    function handleLiveLog(event) {
+      const msg = new TextDecoder().decode(event.target.value);
+      let logbox = document.getElementById("syslog");
+      logbox.value += msg + "\n";
+      logbox.scrollTop = logbox.scrollHeight; // Auto-scroll to bottom
     }
 
     async function sendCommand(cmd) {

@@ -27,7 +27,7 @@ struct DeviceInfo {
   float brakeAlpha;
   char home_ssid[32];
   char home_pass[64];
-  bool maintenanceMode; // <--- THE OTA FLAG
+  bool maintenanceMode; 
 };
 DeviceInfo deviceInfo;
 
@@ -46,16 +46,32 @@ unsigned long brake_start_time = 0;
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHAR_TX_UUID        "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define CHAR_RX_UUID        "828917c1-ea55-4d4a-a66e-fd202cea0645"
+#define CHAR_LOG_UUID       "5111b1db-2917-48f8-b3d5-e51c8f35fc06" // NEW LOG CHANNEL
 
 BLEServer* pServer = NULL;
 BLECharacteristic* pTxCharacteristic = NULL;
+BLECharacteristic* pLogCharacteristic = NULL; // Pointer for sending logs
 bool deviceConnected = false;
 
+// --- LIVE LOGGING STREAM ---
+// This function instantly pushes the text to the Serial Monitor AND your phone!
+void addLog(const char* msg) {
+  Serial.println(msg);
+  if (deviceConnected && pLogCharacteristic != NULL) {
+    pLogCharacteristic->setValue(msg);
+    pLogCharacteristic->notify();
+  }
+}
+
 class MyServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) { deviceConnected = true; }
+    void onConnect(BLEServer* pServer) { 
+      deviceConnected = true; 
+      delay(500); // Give the phone a moment to subscribe before sending the welcome log!
+      addLog("Phone Dashboard Connected!");
+    }
     void onDisconnect(BLEServer* pServer) { 
         deviceConnected = false; 
-        pServer->startAdvertising(); // Re-advertise if phone disconnects
+        pServer->startAdvertising(); 
     }
 };
 
@@ -63,21 +79,21 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         String rxValue = pCharacteristic->getValue().c_str();
         if (rxValue.length() > 0) {
-            Serial.print("Received BLE Command: "); Serial.println(rxValue);
+            Serial.print("Received Command: "); Serial.println(rxValue);
             
-            // Parse Commands from Phone
             if (rxValue == "OTA") {
                 deviceInfo.maintenanceMode = true;
                 EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
+                addLog("Rebooting to Maintenance Mode...");
                 delay(500); ESP.restart();
             }
             else if (rxValue == "SCAN") {
                 deviceInfo.SCAN_FOR_DEVICE = true;
                 EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
+                addLog("Rebooting to Scan for Cadence Sensor...");
                 delay(500); ESP.restart();
             }
             else if (rxValue.startsWith("SET:")) {
-                // Example format: SET:th:2048
                 int sep1 = rxValue.indexOf(':');
                 int sep2 = rxValue.indexOf(':', sep1 + 1);
                 String key = rxValue.substring(sep1 + 1, sep2);
@@ -89,6 +105,7 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
                 if (key == "ba") deviceInfo.brakeAlpha = val.toFloat();
                 
                 EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
+                addLog("Tuning Parameters Saved!");
             }
         }
     }
@@ -119,7 +136,6 @@ void updateBrakeLogic() {
 void runMaintenanceMode() {
   Serial.println("MAINTENANCE MODE: Turning on WiFi for OTA Updates.");
   
-  // Clear the flag so the next boot is normal
   deviceInfo.maintenanceMode = false;
   EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
 
@@ -142,10 +158,8 @@ void runMaintenanceMode() {
 
   ArduinoOTA.setHostname("odrive-node");
   ArduinoOTA.begin();
-  
   Serial.println("Ready for PlatformIO OTA Upload!");
   
-  // INFINITE ZOMBIE LOOP: Do nothing but wait for OTA
   while (true) {
     ArduinoOTA.handle();
     dnsServer.processNextRequest();
@@ -173,9 +187,8 @@ void setup() {
       EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
   }
 
-  // Check if we requested an OTA reboot!
   if (deviceInfo.maintenanceMode) {
-    runMaintenanceMode(); // Will infinitely trap the processor here
+    runMaintenanceMode(); 
   }
 
   // --- NORMAL E-BIKE BOOT BELOW ---
@@ -183,11 +196,9 @@ void setup() {
   digitalWrite(pullupPowerPin, HIGH); 
   pinMode(inductiveProbe, INPUT); 
 
-  // Initialize Global BLE Radio
   BLEDevice::init("E-Bike Pusher");
   BLEDevice::setMTU(512);
 
-  // Setup BLE Server (Dashboard)
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
   BLEService *pService = pServer->createService(SERVICE_UUID);
@@ -197,12 +208,15 @@ void setup() {
   
   BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(CHAR_RX_UUID, BLECharacteristic::PROPERTY_WRITE);
   pRxCharacteristic->setCallbacks(new MyRxCallbacks());
+
+  // NEW: Setup the Live Log Characteristic
+  pLogCharacteristic = pService->createCharacteristic(CHAR_LOG_UUID, BLECharacteristic::PROPERTY_NOTIFY);
+  pLogCharacteristic->addDescriptor(new BLE2902());
   
   pService->start();
   pServer->getAdvertising()->addServiceUUID(SERVICE_UUID);
   pServer->getAdvertising()->start();
 
-  // Setup Hardware
   odrive.begin(CAN_TX_PIN, CAN_RX_PIN);
   odrive.setMode(1, 1); 
   delay(10);
@@ -229,9 +243,9 @@ void loop() {
     deviceInfo.SCAN_FOR_DEVICE = false; 
     EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
     cadenceSensor.clearNewDeviceFlag();
+    addLog("Cadence Sensor paired & saved!");
   }
 
-  // --- ODRIVE CONTROL (50Hz) ---
   if (millis() - last_cmd_time >= 20) {
     last_cmd_time = millis();
     float target_motor_torque = 0.0;
