@@ -1,30 +1,33 @@
-// CadenceSensor.cpp
 #include "CadenceSensor.h"
 
-// Standard BLE UUIDs for Cadence Sensors
-static BLEUUID serviceUUID("00001816-0000-1000-8000-00805f9b34fb");
-static BLEUUID notifyUUID("00002a5b-0000-1000-8000-00805f9b34fb");
+static NimBLEUUID serviceUUID("00001816-0000-1000-8000-00805f9b34fb");
+static NimBLEUUID notifyUUID("00002a5b-0000-1000-8000-00805f9b34fb");
 
-// Global pointer to route BLE C-callbacks back into our C++ object
 CadenceSensor* globalSensorInstance = nullptr;
 
-// --- BLE Callbacks ---
-void notifyCallback(BLERemoteCharacteristic* pChar, uint8_t* data, size_t length, bool isNotify) {
+void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* data, size_t length, bool isNotify) {
   if (globalSensorInstance) globalSensorInstance->_onNotify(data, length);
 }
-class MyClientCallback : public BLEClientCallbacks {
-  void onConnect(BLEClient* pclient) { if (globalSensorInstance) globalSensorInstance->_onConnect(); }
-  void onDisconnect(BLEClient* pclient) { if (globalSensorInstance) globalSensorInstance->_onDisconnect(); }
-};
-class MyScanCallback : public BLEAdvertisedDeviceCallbacks {
-  void onResult(BLEAdvertisedDevice dev) { if (globalSensorInstance) globalSensorInstance->_onScanResult(dev); }
+
+class MyClientCallback : public NimBLEClientCallbacks {
+  void onConnect(NimBLEClient* pclient) { if (globalSensorInstance) globalSensorInstance->_onConnect(); }
+  void onDisconnect(NimBLEClient* pclient) { if (globalSensorInstance) globalSensorInstance->_onDisconnect(); }
 };
 
-// --- Class Implementation ---
+class MyScanCallback : public NimBLEAdvertisedDeviceCallbacks {
+  void onResult(NimBLEAdvertisedDevice* dev) { if (globalSensorInstance) globalSensorInstance->_onScanResult(dev); }
+};
+
+// NEW: Callback when the background scan finishes
+void scanEndedCB(NimBLEScanResults results) {
+  if (globalSensorInstance) globalSensorInstance->_onScanComplete();
+}
+
 CadenceSensor::CadenceSensor() {
   globalSensorInstance = this;
   _connected = false;
   _newDeviceFound = false;
+  _isScanning = false;
   _cadence = 0;
   _lastEventTime = 0;
   _prevCumulativeCrankRev = 0;
@@ -39,42 +42,120 @@ void CadenceSensor::begin(bool scanMode, const char* savedMac, esp_ble_addr_type
   _targetMac = String(savedMac);
   _targetType = savedType;
 
-  // BLEDevice::init(""); //is now in main.cpp because of bluetooth dashboard
-  
-  if (_scanMode) {
-    addLog("BLE Scanning started...");
-    _scanner = BLEDevice::getScan();
-    _scanner->setAdvertisedDeviceCallbacks(new MyScanCallback());
-    _scanner->setActiveScan(true);
-  }
+  _scanner = NimBLEDevice::getScan();
+  _scanner->setAdvertisedDeviceCallbacks(new MyScanCallback());
+  _scanner->setActiveScan(true);
+  _scanner->setInterval(100);
+  _scanner->setWindow(99);
 }
 
 void CadenceSensor::loop() {
-  // 1. Connection Management (With a 5-second anti-spam delay!)
   static unsigned long last_connect_attempt = 0;
 
-  if (!_connected && (millis() - last_connect_attempt > 5000)) {
+  // ONLY start a scan if we aren't already scanning! (NON-BLOCKING)
+  if (!_connected && !_isScanning && (millis() - last_connect_attempt > 4000)) {
     last_connect_attempt = millis();
+    _isScanning = true;
 
-    if (_scanMode) {
-      addLog("Scanning for BLE sensor...");
-      _scanner->start(5, false); // Scan for 5 seconds
-      _scanner->stop();
-      if (_foundDevice != nullptr) connectToServer();
-    } else {
-      if (_targetMac.length() == 17) {
-        connectToServer();
-      } else {
-        addLog("No BLE MAC saved. Click Scan on Dashboard!");
-      }
+    if (_foundDevice != nullptr) {
+        delete _foundDevice;
+        _foundDevice = nullptr;
     }
+
+    if (_scanMode) addLog("Scanning for ANY Cadence Sensor...");
+    else addLog("Searching for saved Cadence Sensor...");
+
+    // Start background scan (Runs for 2 seconds, triggers scanEndedCB when done)
+    _scanner->start(2, scanEndedCB, false); 
   }
 
-  // 2. Timeout Logic (Fixes the stuck cadence bug!)
+  // Timeout Logic
   if (_cadence > 0 && (millis() - _lastEventTime > 2000)) {
     _cadence = 0;
     _prevRPM = 0.0;
   }
+}
+
+void CadenceSensor::_onScanComplete() {
+  _isScanning = false; // Scan finished!
+  if (_foundDevice != nullptr) {
+    connectToServer();
+  } else {
+    if (!_scanMode) addLog("Sensor asleep. Spin crank to wake it up!");
+  }
+}
+
+bool CadenceSensor::connectToServer() {
+  if (_client == nullptr) {
+    _client = NimBLEDevice::createClient();
+    _client->setClientCallbacks(new MyClientCallback());
+  }
+
+  if (_foundDevice == nullptr) return false;
+
+  addLog("Device Found! Connecting...");
+  bool result = _client->connect(_foundDevice); 
+
+  if (result) {
+    NimBLERemoteService* remoteService = _client->getService(serviceUUID);
+    if (remoteService) {
+      NimBLERemoteCharacteristic* sensorChar = remoteService->getCharacteristic(notifyUUID);
+      if (sensorChar) sensorChar->subscribe(true, notifyCallback); // NimBLE simplified subscription!
+    }
+  } else {
+    addLog("BLE Connection failed. Retrying...");
+  }
+  return result;
+}
+
+void CadenceSensor::_onScanResult(NimBLEAdvertisedDevice* dev) {
+  if (dev->haveServiceUUID() && dev->isAdvertisingService(serviceUUID) && dev->getName().length() > 0) {
+    if (_scanMode) {
+      if (_foundDevice == nullptr) _foundDevice = new NimBLEAdvertisedDevice(*dev);
+    } else {
+      if (String(dev->getAddress().toString().c_str()).equalsIgnoreCase(_targetMac)) {
+         if (_foundDevice == nullptr) _foundDevice = new NimBLEAdvertisedDevice(*dev);
+      }
+    }
+  }
+}
+
+void CadenceSensor::_onConnect() {
+  addLog("Cadence Sensor Connected!");
+  _connected = true;
+  if (_scanMode) {
+    _scanMode = false;
+    _newDeviceFound = true; 
+    _newMac = String(_foundDevice->getAddress().toString().c_str());
+    _newName = String(_foundDevice->getName().c_str());
+    _newType = (esp_ble_addr_type_t)_foundDevice->getAddressType();
+  }
+}
+
+void CadenceSensor::_onDisconnect() {
+  addLog("Cadence Sensor Disconnected!");
+  _connected = false;
+}
+
+void CadenceSensor::_onNotify(uint8_t* data, size_t length) {
+  _lastEventTime = millis(); 
+  bool hasWheel = (data[0] & 1);
+  int cRevIdx = hasWheel ? 7 : 1, cTimeIdx = hasWheel ? 9 : 3;
+  int cumCrankRev = (data[cRevIdx + 1] << 8) | data[cRevIdx];
+  int lastCrankTime = (data[cTimeIdx + 1] << 8) | data[cTimeIdx];
+
+  int deltaRot = cumCrankRev - _prevCumulativeCrankRev; if(deltaRot < 0) deltaRot += 65536;
+  int timeDelta = lastCrankTime - _prevCrankTime;       if(timeDelta < 0) timeDelta += 65536;
+
+  if (timeDelta > 0) {
+    _prevCrankStaleness = 0;
+    _prevRPM = ((double)deltaRot) / (((double)timeDelta) / 1024.0 / 60.0);
+  } else if (_prevCrankStaleness < 2) _prevCrankStaleness++;
+  else _prevRPM = 0.0;
+
+  _prevCumulativeCrankRev = cumCrankRev;
+  _prevCrankTime = lastCrankTime;
+  _cadence = (_prevRPM > 160) ? 0 : (int)_prevRPM;
 }
 
 int CadenceSensor::getCadence() { return _cadence; }
@@ -84,84 +165,3 @@ const char* CadenceSensor::getNewMac() { return _newMac.c_str(); }
 const char* CadenceSensor::getNewName() { return _newName.c_str(); }
 esp_ble_addr_type_t CadenceSensor::getNewAddressType() { return _newType; }
 void CadenceSensor::clearNewDeviceFlag() { _newDeviceFound = false; }
-
-bool CadenceSensor::connectToServer() {
-  if (_client == nullptr) {
-    _client = BLEDevice::createClient();
-    _client->setClientCallbacks(new MyClientCallback());
-  }
-
-  bool result = false;
-  if (_scanMode && _foundDevice != nullptr) {
-    addLog("Connecting to newly scanned sensor...");
-    result = _client->connect(_foundDevice);
-  } else if (!_scanMode && _targetMac.length() == 17) {
-    addLog("Connecting to saved sensor...");
-    result = _client->connect(BLEAddress(_targetMac.c_str()), _targetType);
-  }
-
-  if (result) {
-    BLERemoteService* remoteService = _client->getService(serviceUUID);
-    if (remoteService) {
-      BLERemoteCharacteristic* sensorChar = remoteService->getCharacteristic(notifyUUID);
-      if (sensorChar) sensorChar->registerForNotify(notifyCallback);
-    }
-  } else {
-    addLog("BLE Connection failed. Retrying...");
-  }
-  return result;
-}
-
-void CadenceSensor::_onConnect() {
-  addLog("BLE Sensor Connected!");
-  _connected = true;
-  if (_scanMode) {
-    _scanMode = false;
-    _newDeviceFound = true; 
-    // Force safe string conversion so it doesn't vanish from memory
-    _newMac = String(_foundDevice->getAddress().toString().c_str());
-    _newName = String(_foundDevice->getName().c_str());
-    _newType = (esp_ble_addr_type_t)_foundDevice->getAddressType();
-  }
-}
-
-void CadenceSensor::_onDisconnect() {
-  addLog("BLE Sensor Disconnected!");
-  _connected = false;
-}
-
-void CadenceSensor::_onScanResult(BLEAdvertisedDevice dev) {
-  if (dev.haveServiceUUID() && dev.isAdvertisingService(serviceUUID) && dev.getName().length() > 0) {
-    if (_foundDevice == nullptr) _foundDevice = new BLEAdvertisedDevice(dev);
-  }
-}
-
-void CadenceSensor::_onNotify(uint8_t* data, size_t length) {
-  _lastEventTime = millis(); // Refresh the timeout watchdog
-
-  bool hasWheel = (data[0] & 1);
-  int cRevIdx = hasWheel ? 7 : 1, cTimeIdx = hasWheel ? 9 : 3;
-  
-  int cumCrankRev = (data[cRevIdx + 1] << 8) | data[cRevIdx];
-  int lastCrankTime = (data[cTimeIdx + 1] << 8) | data[cTimeIdx];
-
-  // FIX: 16-bit rollovers require adding exactly 65536
-  int deltaRot = cumCrankRev - _prevCumulativeCrankRev; 
-  if(deltaRot < 0) deltaRot += 65536;
-  
-  int timeDelta = lastCrankTime - _prevCrankTime;       
-  if(timeDelta < 0) timeDelta += 65536;
-
-  if (timeDelta > 0) {
-    _prevCrankStaleness = 0;
-    _prevRPM = ((double)deltaRot) / (((double)timeDelta) / 1024.0 / 60.0);
-  } else if (_prevCrankStaleness < 2) {
-    _prevCrankStaleness++;
-  } else {
-    _prevRPM = 0.0;
-  }
-
-  _prevCumulativeCrankRev = cumCrankRev;
-  _prevCrankTime = lastCrankTime;
-  _cadence = (_prevRPM > 160) ? 0 : (int)_prevRPM;
-}

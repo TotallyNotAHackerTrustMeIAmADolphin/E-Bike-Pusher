@@ -1,23 +1,20 @@
 #include "BLEDashboard.h"
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <NimBLEDevice.h> // <--- NEW LIBRARY
 
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHAR_TX_UUID        "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 #define CHAR_RX_UUID        "828917c1-ea55-4d4a-a66e-fd202cea0645"
 #define CHAR_LOG_UUID       "5111b1db-2917-48f8-b3d5-e51c8f35fc06"
 
-BLEServer* pServer = NULL;
-BLECharacteristic* pTxCharacteristic = NULL;
-BLECharacteristic* pLogCharacteristic = NULL;
+NimBLEServer* pServer = NULL;
+NimBLECharacteristic* pTxCharacteristic = NULL;
+NimBLECharacteristic* pLogCharacteristic = NULL;
 
 bool deviceConnected = false;
 bool restartAdvertising = false;
 char log_buffer[1024] = "System Booting...\n";
+uint16_t phone_conn_id = 0xFFFF;
 
-// NEW: Safely add to memory, but DO NOT transmit here to prevent threading crashes!
 void addLog(const char* msg) {
   Serial.println(msg);
   int msg_len = strlen(msg);
@@ -29,28 +26,35 @@ void addLog(const char* msg) {
     if (shift >= cur_len) { log_buffer[0] = '\0'; cur_len = 0; } 
     else { memmove(log_buffer, log_buffer + shift, cur_len - shift + 1); cur_len -= shift; }
   }
-  strcat(log_buffer, msg); 
-  strcat(log_buffer, "\n");
+  strcat(log_buffer, msg); strcat(log_buffer, "\n");
+
+  if (deviceConnected && pLogCharacteristic != NULL) {
+    pLogCharacteristic->setValue((uint8_t*)msg, strlen(msg));
+    pLogCharacteristic->notify();
+  }
 }
 
-class MyServerCallbacks : public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) { 
-      deviceConnected = true; 
-      Serial.println("[BLE] Phone Connected!");
+class MyServerCallbacks : public NimBLEServerCallbacks {
+    void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) { 
+        pServer->startAdvertising(); 
+        phone_conn_id = desc->conn_handle; 
+        deviceConnected = true; 
+        Serial.println("\n[BLE] Phone Dashboard Connected!");
     }
-    void onDisconnect(BLEServer* pServer) { 
-        deviceConnected = false; 
+    void onDisconnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) { 
         restartAdvertising = true; 
-        Serial.println("[BLE] Phone Disconnected!");
+        if (desc->conn_handle == phone_conn_id) {
+            deviceConnected = false; 
+            phone_conn_id = 0xFFFF;
+            Serial.println("\n[BLE] Phone Dashboard Disconnected!");
+        }
     }
 };
 
-class MyRxCallbacks : public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic *pCharacteristic) {
+class MyRxCallbacks : public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic *pCharacteristic) {
         String rxValue = pCharacteristic->getValue().c_str();
         if (rxValue.length() > 0) {
-            Serial.print("BLE RX: "); Serial.println(rxValue);
-            
             if (rxValue == "OTA") triggerOTA();
             else if (rxValue == "SCAN") triggerScan();
             else if (rxValue == "SAVE") triggerEEPROMSave();
@@ -69,7 +73,6 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
                     deviceInfo.brakingTimeout = rxValue.substring(s1 + 1, s2).toInt();
                     deviceInfo.torqueMultiplier = rxValue.substring(s2 + 1, s3).toFloat();
                     deviceInfo.brakeAlpha = rxValue.substring(s3 + 1).toFloat();
-                    Serial.println("RAM settings updated!");
                 }
             }
             else if (rxValue.startsWith("WIFI:")) {
@@ -81,21 +84,19 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
 };
 
 void dash_begin() {
-  BLEDevice::init("E-Bike Pusher");
-  BLEDevice::setMTU(256); // A safer MTU size for all phones
-
-  pServer = BLEDevice::createServer();
+  NimBLEDevice::init("E-Bike Pusher");
+  
+  pServer = NimBLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
-  BLEService *pService = pServer->createService(SERVICE_UUID);
+  NimBLEService *pService = pServer->createService(SERVICE_UUID);
   
-  pTxCharacteristic = pService->createCharacteristic(CHAR_TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  pTxCharacteristic->addDescriptor(new BLE2902());
+  // NimBLE auto-creates 2902 descriptors!
+  pTxCharacteristic = pService->createCharacteristic(CHAR_TX_UUID, NIMBLE_PROPERTY::NOTIFY);
   
-  BLECharacteristic *pRxCharacteristic = pService->createCharacteristic(CHAR_RX_UUID, BLECharacteristic::PROPERTY_WRITE);
+  NimBLECharacteristic *pRxCharacteristic = pService->createCharacteristic(CHAR_RX_UUID, NIMBLE_PROPERTY::WRITE);
   pRxCharacteristic->setCallbacks(new MyRxCallbacks());
 
-  pLogCharacteristic = pService->createCharacteristic(CHAR_LOG_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  pLogCharacteristic->addDescriptor(new BLE2902());
+  pLogCharacteristic = pService->createCharacteristic(CHAR_LOG_UUID, NIMBLE_PROPERTY::NOTIFY);
   
   pService->start();
   pServer->getAdvertising()->addServiceUUID(SERVICE_UUID);
@@ -103,11 +104,9 @@ void dash_begin() {
 }
 
 void dash_loop() {
-  // Safely restart advertising in the main loop thread!
   if (restartAdvertising) {
     delay(200);
     pServer->startAdvertising();
-    Serial.println("[BLE] Advertising Restarted.");
     restartAdvertising = false;
   }
 }
