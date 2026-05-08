@@ -8,6 +8,7 @@
 
 NimBLEServer *pServer = NULL;
 NimBLECharacteristic *pTxCharacteristic = NULL;
+NimBLECharacteristic *pRxCharacteristic = NULL; // <--- FIXED: Added missing declaration
 NimBLECharacteristic *pLogCharacteristic = NULL;
 
 bool deviceConnected = false;
@@ -51,7 +52,7 @@ class MyServerCallbacks : public NimBLEServerCallbacks
 {
   void onConnect(NimBLEServer *pServer, ble_gap_conn_desc *desc)
   {
-    pServer->updateConnParams(desc->conn_handle, 12, 12, 0, 60); // Optimize for speed
+    pServer->updateConnParams(desc->conn_handle, 12, 12, 0, 60);
     phone_conn_id = desc->conn_handle;
     deviceConnected = true;
     addLog("[BLE] Dashboard Connected!");
@@ -83,7 +84,7 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
         triggerEEPROMSave();
       else if (rxValue == "GET")
       {
-        char msg[250]; // Large buffer for SSID/Pass
+        char msg[250];
         snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"tm\":%.2f,\"tc\":%.2f,\"s\":\"%s\",\"p\":\"%s\"}",
                  deviceInfo.brakingThreshold, deviceInfo.torqueMultiplier,
                  deviceInfo.brakeTimeConstant, deviceInfo.home_ssid, deviceInfo.home_pass);
@@ -92,7 +93,7 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
       }
       else if (rxValue.startsWith("CFG:"))
       {
-        // Input: CFG:th:tm:tc
+        // Matches format: CFG:th:tm:tc
         int s1 = rxValue.indexOf(':', 4);
         int s2 = rxValue.indexOf(':', s1 + 1);
 
@@ -124,8 +125,10 @@ void dash_begin()
   NimBLEService *pService = pServer->createService(SERVICE_UUID);
 
   pTxCharacteristic = pService->createCharacteristic(CHAR_TX_UUID, NIMBLE_PROPERTY::NOTIFY);
+
   pRxCharacteristic = pService->createCharacteristic(CHAR_RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   pRxCharacteristic->setCallbacks(new MyRxCallbacks());
+
   pLogCharacteristic = pService->createCharacteristic(CHAR_LOG_UUID, NIMBLE_PROPERTY::NOTIFY);
 
   pService->start();
