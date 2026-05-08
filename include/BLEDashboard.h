@@ -3,31 +3,26 @@
 
 #include <Arduino.h>
 
-// Global Struct blueprint so all files can read it
 struct DeviceInfo {
   char macAddress[18];
   char deviceName[20];
-  uint8_t addressType;  // <--- THE NIMBLE FIX!
+  uint8_t addressType;
   bool SCAN_FOR_DEVICE;
   int brakingThreshold;
-  int brakingTimeout;
   float torqueMultiplier;
-  float brakeAlpha;
+  float brakeTimeConstant; // NEW: Replaces Alpha and Timeout! (in seconds)
   char home_ssid[32];
   char home_pass[64];
   bool maintenanceMode;
 };
 extern DeviceInfo deviceInfo;
 
-// Global Log Function
 void addLog(const char* msg);
 
-// Dashboard Module
 void dash_begin();
 void dash_loop();
-void dash_sendTelemetry(int cadence, float power, float voltage, float current, float brake_avg, bool isBraking);
+void dash_sendTelemetry(int cadence, float power, float voltage, float current, float brake_avg, float target_torque);
 
-// Hardware Triggers for main.cpp
 extern void triggerEEPROMSave();
 extern void triggerOTA();
 extern void triggerScan();
