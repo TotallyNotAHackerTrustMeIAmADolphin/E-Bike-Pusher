@@ -52,6 +52,7 @@ BLEServer* pServer = NULL;
 BLECharacteristic* pTxCharacteristic = NULL;
 BLECharacteristic* pLogCharacteristic = NULL; 
 bool deviceConnected = false;
+bool restartAdvertising = false; // <--- NEW: Safe restart flag
 
 // --- LIVE LOGGING STREAM ---
 void addLog(const char* msg) {
@@ -65,12 +66,12 @@ void addLog(const char* msg) {
 class MyServerCallbacks : public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) { 
       deviceConnected = true; 
-      delay(500); 
-      addLog("Phone Dashboard Connected!");
+      Serial.println("\n[BLE] Dashboard Connected!");
     }
     void onDisconnect(BLEServer* pServer) { 
         deviceConnected = false; 
-        pServer->startAdvertising(); 
+        restartAdvertising = true; // Tell the main loop to restart it safely!
+        Serial.println("\n[BLE] Dashboard Disconnected! Flagging restart...");
     }
 };
 
@@ -280,6 +281,14 @@ void loop() {
     odrive.requestData(CMD_GET_ENCODER_ESTIMATES);
     odrive.requestData(CMD_GET_IQC);
     odrive.requestData(CMD_GET_VBUS_VOLTAGE); 
+  }
+
+  // --- NEW: Safely Restart BLE Advertising ---
+  if (restartAdvertising) {
+    delay(500); // Give the Bluetooth stack a moment to fully clean up
+    pServer->startAdvertising();
+    Serial.println("[BLE] Advertising Restarted. Ready for new connection.");
+    restartAdvertising = false;
   }
 
   // --- FAST BLUETOOTH TELEMETRY (2Hz) ---

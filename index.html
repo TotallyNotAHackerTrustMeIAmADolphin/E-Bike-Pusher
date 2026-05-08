@@ -60,22 +60,36 @@
     const RX_UUID = "828917c1-ea55-4d4a-a66e-fd202cea0645";
     const LOG_UUID = "5111b1db-2917-48f8-b3d5-e51c8f35fc06";
     let bleRxChar = null;
+    let bleDevice = null;
 
     async function connectBLE() {
       try {
-        const device = await navigator.bluetooth.requestDevice({ filters:[{ name: 'E-Bike Pusher' }], optionalServices: [SERVICE_UUID] });
-        document.getElementById("connectBtn").innerText = "Connecting...";
+        console.log("Requesting BLE Device...");
+        bleDevice = await navigator.bluetooth.requestDevice({ 
+          filters:[{ name: 'E-Bike Pusher' }], 
+          optionalServices:[SERVICE_UUID] 
+        });
         
-        const server = await device.gatt.connect();
+        // Listen for the device dropping the connection!
+        bleDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+        document.getElementById("connectBtn").innerText = "Connecting...";
+        console.log("Connecting to GATT Server...");
+        const server = await bleDevice.gatt.connect();
+        
+        console.log("Getting Services...");
         const service = await server.getPrimaryService(SERVICE_UUID);
         
+        console.log("Getting Characteristics...");
         bleRxChar = await service.getCharacteristic(RX_UUID);
         const txChar = await service.getCharacteristic(TX_UUID);
         const logChar = await service.getCharacteristic(LOG_UUID);
         
+        console.log("Subscribing to Telemetry...");
         await txChar.startNotifications();
         txChar.addEventListener('characteristicvaluechanged', handleTelemetry);
         
+        console.log("Subscribing to Logs...");
         await logChar.startNotifications();
         logChar.addEventListener('characteristicvaluechanged', handleLiveLog);
         
@@ -83,25 +97,37 @@
         document.getElementById("connectBtn").style.background = "#00ea8d";
 
         setTimeout(() => sendCommand("GET"), 500);
+        console.log("Connection Complete!");
 
       } catch(e) { 
-        alert("Connection Failed."); 
+        console.error("BLE Error: ", e);
+        alert("Connection Failed. Check browser console for details."); 
         document.getElementById("connectBtn").innerText = "Connect to Bike"; 
       }
+    }
+
+    function onDisconnected(event) {
+      console.log("Bluetooth Connection Dropped!");
+      document.getElementById("connectBtn").innerText = "Connect to Bike";
+      document.getElementById("connectBtn").style.background = "#00d2ff";
+      bleRxChar = null;
+      
+      // Wipe the telemetry so we know it's dead
+      document.getElementById("cad").innerText = "--";
+      document.getElementById("pwr").innerText = "--";
+      document.getElementById("b_stat").innerText = "DISCONNECTED";
+      document.getElementById("b_stat").classList.add("alert");
     }
 
     function handleTelemetry(event) {
       const value = new TextDecoder().decode(event.target.value);
       try {
         const d = JSON.parse(value);
-        
         if (d.cfg) {
           document.getElementById("th").value = d.th;
           document.getElementById("ti").value = d.ti;
           document.getElementById("tm").value = d.tm.toFixed(2);
           document.getElementById("ba").value = d.ba.toFixed(2);
-          document.getElementById("ssid").value = d.s;
-          document.getElementById("psk").value = d.p;
           return;
         }
 
