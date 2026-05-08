@@ -23,7 +23,7 @@ struct DeviceInfo {
   bool SCAN_FOR_DEVICE;
   int brakingThreshold;
   int brakingTimeout;
-  float torqueMultiplier; // Now acts as ABSOLUTE MAX AMPS
+  float torqueMultiplier; 
   float brakeAlpha;
   char home_ssid[32];
   char home_pass[64];
@@ -92,41 +92,33 @@ class MyRxCallbacks : public BLECharacteristicCallbacks {
                 delay(500); ESP.restart();
             }
             else if (rxValue == "GET") {
-                // Dashboard requested settings, send them safely!
                 char msg[200];
-                snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"ti\":%d,\"tm\":%.2f,\"ba\":%.2f,\"s\":\"%s\",\"p\":\"%s\"}",
-                         deviceInfo.brakingThreshold, deviceInfo.brakingTimeout, deviceInfo.torqueMultiplier, 
-                         deviceInfo.brakeAlpha, deviceInfo.home_ssid, deviceInfo.home_pass);
+                snprintf(msg, sizeof(msg), "{\"cfg\":1,\"th\":%d,\"ti\":%d,\"tm\":%.3f,\"ba\":%.2f}",
+                         deviceInfo.brakingThreshold, deviceInfo.brakingTimeout, deviceInfo.torqueMultiplier, deviceInfo.brakeAlpha);
                 pTxCharacteristic->setValue(msg);
                 pTxCharacteristic->notify();
             }
-            else if (rxValue.startsWith("SET:")) {
-                int sep1 = rxValue.indexOf(':');
-                int sep2 = rxValue.indexOf(':', sep1 + 1);
-                String key = rxValue.substring(sep1 + 1, sep2);
-                String val = rxValue.substring(sep2 + 1);
+            else if (rxValue.startsWith("CFG:")) {
+                // Parse single string: CFG:th:ti:tm:ba
+                int s1 = rxValue.indexOf(':', 4);
+                int s2 = rxValue.indexOf(':', s1 + 1);
+                int s3 = rxValue.indexOf(':', s2 + 1);
                 
-                if (key == "th") deviceInfo.brakingThreshold = val.toInt();
-                if (key == "ti") deviceInfo.brakingTimeout = val.toInt();
-                if (key == "tm") deviceInfo.torqueMultiplier = val.toFloat();
-                if (key == "ba") deviceInfo.brakeAlpha = val.toFloat();
-                
-                EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
-                addLog("Tuning Parameters Saved!");
+                if(s1 > 0 && s2 > 0 && s3 > 0) {
+                    deviceInfo.brakingThreshold = rxValue.substring(4, s1).toInt();
+                    deviceInfo.brakingTimeout = rxValue.substring(s1 + 1, s2).toInt();
+                    deviceInfo.torqueMultiplier = rxValue.substring(s2 + 1, s3).toFloat();
+                    deviceInfo.brakeAlpha = rxValue.substring(s3 + 1).toFloat();
+                    
+                    // NO EEPROM COMMIT HERE! LIVE RAM TUNING ONLY!
+                    addLog("Live Tune Applied (Not Saved)");
+                }
             }
-            else if (rxValue.startsWith("WIFI:")) {
-                // Parse: WIFI:SSID:PASSWORD
-                int sep1 = rxValue.indexOf(':');
-                int sep2 = rxValue.indexOf(':', sep1 + 1);
-                String s = rxValue.substring(sep1 + 1, sep2);
-                String p = rxValue.substring(sep2 + 1);
-                
-                strlcpy(deviceInfo.home_ssid, s.c_str(), sizeof(deviceInfo.home_ssid));
-                strlcpy(deviceInfo.home_pass, p.c_str(), sizeof(deviceInfo.home_pass));
-                EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
-                
-                addLog("WiFi Saved! Rebooting...");
-                delay(500); ESP.restart();
+            else if (rxValue == "SAVE") {
+                // EXPLICIT EEPROM COMMIT COMMAND!
+                EEPROM.put(EEPROM_ADDRESS, deviceInfo); 
+                EEPROM.commit(); 
+                addLog("Tune permanently saved to EEPROM!");
             }
         }
     }
@@ -155,7 +147,7 @@ void updateBrakeLogic() {
 // MAINTENANCE MODE (WIFI + OTA ONLY!)
 // =======================================================
 void runMaintenanceMode() {
-  Serial.println("MAINTENANCE MODE: Turning on WiFi for OTA Updates.");
+  Serial.println("MAINTENANCE MODE: Turning on WiFi for OTA.");
   
   deviceInfo.maintenanceMode = false;
   EEPROM.put(EEPROM_ADDRESS, deviceInfo); EEPROM.commit();
@@ -178,12 +170,12 @@ void runMaintenanceMode() {
   
   while (true) {
     ArduinoOTA.handle();
-    delay(2); // Feed watchdog
+    delay(2); 
   }
 }
 
 // =======================================================
-// SETUP (Normal Boot)
+// SETUP 
 // =======================================================
 void setup() {
   Serial.begin(115200);
@@ -194,7 +186,7 @@ void setup() {
   if(deviceInfo.brakingThreshold <= 0 || deviceInfo.brakingThreshold > 4096 || isnan(deviceInfo.torqueMultiplier)) {
       deviceInfo.brakingThreshold = 2048; 
       deviceInfo.brakingTimeout = 2000;
-      deviceInfo.torqueMultiplier = 5.0; // Default Max Push Force: 5 Amps
+      deviceInfo.torqueMultiplier = 5.0; // Default Max Push: 5.0A
       deviceInfo.brakeAlpha = 0.15;       
       strncpy(deviceInfo.home_ssid, "wlesswg", 31);
       strncpy(deviceInfo.home_pass, "hba.1245", 63);
@@ -264,8 +256,6 @@ void loop() {
     last_cmd_time = millis();
     float target_motor_torque = 0.0;
 
-    // THE CORRECT MATH! 
-    // Cadence is ON/OFF. Multiplier is Absolute Max Amps.
     if (!isBraking && cadenceSensor.getCadence() > 0) {
       target_motor_torque = deviceInfo.torqueMultiplier * brake_avg;
     }
@@ -273,18 +263,19 @@ void loop() {
     odrive.setTorque(target_motor_torque);
     odrive.requestData(CMD_GET_ENCODER_ESTIMATES);
     odrive.requestData(CMD_GET_IQC);
-    odrive.requestData(CMD_GET_VBUS_VOLTAGE);
+    odrive.requestData(CMD_GET_VBUS_VOLTAGE); 
   }
 
   // --- FAST BLUETOOTH TELEMETRY (2Hz) ---
   if (deviceConnected && millis() - last_dashboard_time >= 500) {
     last_dashboard_time = millis();
-    float elec_power = odrive.getVoltage() * odrive.getBusCurrent();
     
-    // TINY JSON PACKET! 100% crash proof!
-    char json[100];
+    // THE FIX: Switch back to accurate Mechanical Power!
+    float mech_power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
+    
+    char json[150];
     snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"a\":%.1f,\"pr\":%.2f,\"b\":%d}", 
-             cadenceSensor.getCadence(), elec_power, odrive.getVoltage(), odrive.getCurrent(), brake_avg, isBraking?1:0);
+             cadenceSensor.getCadence(), mech_power, odrive.getVoltage(), odrive.getCurrent(), brake_avg, isBraking?1:0);
     
     pTxCharacteristic->setValue(json);
     pTxCharacteristic->notify();

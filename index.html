@@ -11,7 +11,7 @@
     .lbl { font-size: 10px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
     .alert { color: #ff3b30 !important; }
     .panel { background: #1a1a1a; padding: 15px; border-radius: 8px; margin-top: 15px; text-align: left; }
-    input { width: 90px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; float: right; }
+    input { width: 80px; padding: 5px; background: #333; color: white; border: 1px solid #555; border-radius: 4px; float: right; }
     button { background: #00d2ff; color: #000; border: none; padding: 12px; border-radius: 5px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 10px; }
     .danger { background: #ff3b30; color: white; }
     p { margin: 8px 0; clear: both; overflow: hidden; line-height: 24px; font-size: 14px; color: #ddd; }
@@ -37,16 +37,14 @@
   </div>
 
   <div class="panel">
-    <h3 style="margin-top:0; color:#aaa;">Tuning & Settings</h3>
-    <p>Brake Threshold: <input type="number" id="th"></p>
-    <p>Timeout (ms): <input type="number" id="ti"></p>
-    <p>Max Push Force (A): <input type="number" step="0.1" id="tm"></p>
-    <p>Brake Smoothing: <input type="number" step="0.01" id="ba"></p>
-    <button onclick="saveSettings()">Save Tuning</button>
-    <hr style="border-color:#333; margin:15px 0;">
-    <p>Home SSID: <input type="text" id="ssid"></p>
-    <p>Home Pass: <input type="password" id="psk"></p>
-    <button onclick="saveWiFi()">Save WiFi & Reboot</button>
+    <h3 style="margin-top:0; color:#aaa;">Live Tuning & Settings</h3>
+    <!-- Notice the new onchange="sendTuning()" events! -->
+    <p>Brake Threshold: <input type="number" id="th" onchange="sendTuning()"></p>
+    <p>Timeout (ms): <input type="number" id="ti" onchange="sendTuning()"></p>
+    <p>Max Push Force (A): <input type="number" step="0.1" id="tm" onchange="sendTuning()"></p>
+    <p>Brake Smoothing: <input type="number" step="0.01" id="ba" onchange="sendTuning()"></p>
+    <button onclick="commitSettings()">Save to EEPROM</button>
+    
     <hr style="border-color:#333; margin:15px 0;">
     <button class="danger" onclick="sendCommand('SCAN')">Scan for new BLE Sensor</button>
     <button class="danger" style="background:#ff9500" onclick="sendCommand('OTA')">Enable Maintenance Mode</button>
@@ -80,7 +78,6 @@
         document.getElementById("connectBtn").innerText = "Connected!";
         document.getElementById("connectBtn").style.background = "#00ea8d";
 
-        // Ask ESP32 to populate settings inputs ONCE!
         setTimeout(() => sendCommand("GET"), 500);
 
       } catch(e) { 
@@ -94,18 +91,14 @@
       try {
         const d = JSON.parse(value);
         
-        // If it's the settings packet, populate inputs
         if (d.cfg) {
           document.getElementById("th").value = d.th;
           document.getElementById("ti").value = d.ti;
           document.getElementById("tm").value = d.tm.toFixed(2);
           document.getElementById("ba").value = d.ba.toFixed(2);
-          document.getElementById("ssid").value = d.s;
-          document.getElementById("psk").value = d.p;
           return;
         }
 
-        // Fast Telemetry
         document.getElementById("cad").innerText = d.c;
         document.getElementById("pwr").innerText = d.p.toFixed(0);
         document.getElementById("vol").innerText = d.v.toFixed(1);
@@ -113,8 +106,7 @@
         document.getElementById("prb").innerText = d.pr.toFixed(2);
         
         let bs = document.getElementById("b_stat");
-        if(d.b) { bs.innerText = "BRAKING"; bs.classList.add("alert"); } 
-        else { bs.innerText = "COAST"; bs.classList.remove("alert"); }
+        if(d.b) { bs.innerText = "BRAKING"; bs.classList.add("alert"); } else { bs.innerText = "COAST"; bs.classList.remove("alert"); }
       } catch(e) {}
     }
 
@@ -125,25 +117,21 @@
       logbox.scrollTop = logbox.scrollHeight;
     }
 
-    async function sendCommand(cmd) { 
-      if (!bleRxChar) return; 
-      let encoder = new TextEncoder(); 
-      await bleRxChar.writeValue(encoder.encode(cmd)); 
+    async function sendCommand(cmd) { if (!bleRxChar) return; let encoder = new TextEncoder(); await bleRxChar.writeValue(encoder.encode(cmd)); }
+    
+    // NEW: Instantly send live parameters without saving
+    function sendTuning() {
+      let th = document.getElementById("th").value;
+      let ti = document.getElementById("ti").value;
+      let tm = document.getElementById("tm").value;
+      let ba = document.getElementById("ba").value;
+      sendCommand(`CFG:${th}:${ti}:${tm}:${ba}`);
     }
 
-    function saveSettings() {
-      sendCommand("SET:th:" + document.getElementById("th").value);
-      setTimeout(() => sendCommand("SET:ti:" + document.getElementById("ti").value), 100);
-      setTimeout(() => sendCommand("SET:tm:" + document.getElementById("tm").value), 200);
-      setTimeout(() => sendCommand("SET:ba:" + document.getElementById("ba").value), 300);
-      alert("Settings sent to Bike!");
-    }
-
-    function saveWiFi() {
-      let ssid = document.getElementById("ssid").value;
-      let psk = document.getElementById("psk").value;
-      sendCommand("WIFI:" + ssid + ":" + psk);
-      alert("WiFi Saved! Rebooting...");
+    // NEW: Explicit EEPROM Commit
+    function commitSettings() {
+      sendCommand("SAVE");
+      alert("Tuning locked into EEPROM!");
     }
   </script>
 </body>
