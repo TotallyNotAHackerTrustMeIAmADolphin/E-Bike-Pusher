@@ -137,15 +137,12 @@ void dash_loop()
 
 // ... (Rest of file remains the same)
 
-void dash_sendTelemetry(int cadence, float power, float voltage, float current, float brake_avg, float target_torque)
-{
-  if (deviceConnected)
-  {
-    char json[128];
-    // bf = Brake Factor (-1.0 to 1.0)
-    snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"a\":%.1f,\"bf\":%.2f,\"tq\":%.2f}",
-             cadence, power, voltage, current, brake_avg, target_torque);
-    pTxCharacteristic->setValue((uint8_t *)json, strlen(json));
+void dash_sendTelemetry(TelemetryData &d) {
+  if (deviceConnected) {
+    char json[150];
+    snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"a\":%.1f,\"pr\":%.2f,\"tq\":%.2f,\"m\":%d}", 
+             d.cadence, d.mech_power, d.vbus, d.phase_current, d.brake_filter, d.target_val, d.odrive_mode);
+    pTxCharacteristic->setValue((uint8_t*)json, strlen(json));
     pTxCharacteristic->notify();
   }
 }

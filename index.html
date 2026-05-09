@@ -3,7 +3,7 @@
 
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>E-Bike Pusher (WebBLE)</title>
+  <title>E-Bike Pusher</title>
   <style>
     body {
       font-family: 'Segoe UI', Arial, sans-serif;
@@ -31,7 +31,7 @@
     }
 
     .val {
-      font-size: 24px;
+      font-size: 20px;
       font-weight: bold;
       margin: 10px 0;
       color: #00ea8d;
@@ -113,28 +113,37 @@
 
   <div class="grid">
     <div class="card">
+      <div class="lbl">Mode</div>
+      <div class="val" id="mod">--</div>
+    </div>
+    <div class="card">
       <div class="lbl">Cadence</div>
       <div class="val" id="cad">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Elec Pwr (W)</div>
-      <div class="val" id="pwr">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Battery (V)</div>
-      <div class="val" id="vol">--</div>
     </div>
     <div class="card">
       <div class="lbl">Filter</div>
       <div class="val" id="prb">--</div>
     </div>
     <div class="card">
-      <div class="lbl">Target Vel</div>
+      <div class="lbl">Target</div>
       <div class="val" id="tq">--</div>
     </div>
+
     <div class="card">
-      <div class="lbl">Mode</div>
-      <div class="val" id="mod">--</div>
+      <div class="lbl">Batt (V)</div>
+      <div class="val" id="vol">--</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Phase (A)</div>
+      <div class="val" id="amp">--</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Mech Pwr (W)</div>
+      <div class="val" id="pwr">--</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Status</div>
+      <div class="val" id="b_stat">--</div>
     </div>
   </div>
 
@@ -145,7 +154,6 @@
 
   <div class="panel">
     <h3 style="margin-top:0; color:#aaa;">Live Tuning</h3>
-    <!-- tm is now the Acceleration Rate! -->
     <p>Accel Rate: <input type="number" step="0.1" id="tm" oninput="sendTuning()"></p>
     <p>Filter Time (s): <input type="number" step="0.1" id="tc" oninput="sendTuning()"></p>
     <button onclick="commitSettings()">Save to Flash</button>
@@ -199,25 +207,39 @@
     function handleTelemetry(event) {
       try {
         const d = JSON.parse(new TextDecoder().decode(event.target.value));
+
         if (d.cfg) {
-          document.getElementById("tm").value = d.tm.toFixed(2);
-          document.getElementById("tc").value = d.tc.toFixed(2);
-          document.getElementById("ssid").value = d.s;
+          if (d.tm !== undefined) document.getElementById("tm").value = d.tm.toFixed(2);
+          if (d.tc !== undefined) document.getElementById("tc").value = d.tc.toFixed(2);
+          if (d.s !== undefined) document.getElementById("ssid").value = d.s;
           return;
         }
 
-        document.getElementById("cad").innerText = d.c;
-        document.getElementById("pwr").innerText = d.p.toFixed(0);
-        document.getElementById("vol").innerText = d.v.toFixed(1);
-        document.getElementById("prb").innerText = d.pr.toFixed(2);
+        // Safely update DOM only if variables exist
+        if (d.c !== undefined) document.getElementById("cad").innerText = d.c;
+        if (d.p !== undefined) document.getElementById("pwr").innerText = d.p.toFixed(0);
+        if (d.v !== undefined) document.getElementById("vol").innerText = d.v.toFixed(1);
+        if (d.a !== undefined) document.getElementById("amp").innerText = d.a.toFixed(1);
+        if (d.pr !== undefined) document.getElementById("prb").innerText = d.pr.toFixed(2);
 
-        let tqElement = document.getElementById("tq");
-        tqElement.innerText = d.tq.toFixed(2);
+        if (d.m !== undefined) {
+          let modEl = document.getElementById("mod");
+          modEl.innerText = (d.m === 1) ? "TORQ" : "VEL";
+          modEl.style.color = (d.m === 1) ? "#ff9500" : "#00d2ff";
+        }
 
-        // Show the active Control Mode
-        let modElement = document.getElementById("mod");
-        if (d.m === 1) { modElement.innerText = "TORQUE"; modElement.style.color = "#ff9500"; }
-        else { modElement.innerText = "VELOCITY"; modElement.style.color = "#00d2ff"; }
+        if (d.tq !== undefined) {
+          let tqEl = document.getElementById("tq");
+          tqEl.innerText = d.tq.toFixed(2);
+          tqEl.style.color = (d.m === 1 && d.tq < 0) ? "#ff3b30" : "#00ea8d";
+        }
+
+        if (d.pr !== undefined) {
+          let bs = document.getElementById("b_stat");
+          if (d.pr < -0.5) { bs.innerText = "BRAKE"; bs.classList.add("alert"); }
+          else if (d.pr > 0.1) { bs.innerText = "PUSH"; bs.classList.remove("alert"); bs.style.color = "#00ea8d"; }
+          else { bs.innerText = "COAST"; bs.classList.remove("alert"); bs.style.color = "#fff"; }
+        }
 
       } catch (e) { }
     }

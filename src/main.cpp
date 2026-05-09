@@ -1,4 +1,3 @@
-// main.cpp
 #include <Arduino.h>
 #include <WiFi.h>
 #include <DNSServer.h>
@@ -8,6 +7,7 @@
 #include "CadenceSensor.h"
 #include "BLEDashboard.h"
 
+// --- HARDWARE OBJECTS ---
 ODriveCAN odrive(0);
 CadenceSensor cadenceSensor;
 DeviceInfo deviceInfo;
@@ -15,6 +15,7 @@ DeviceInfo deviceInfo;
 #define EEPROM_SIZE 256
 constexpr int EEPROM_ADDRESS = 0;
 
+// --- HARDWARE PINS ---
 #define CAN_TX_PIN GPIO_NUM_17
 #define CAN_RX_PIN GPIO_NUM_16
 #define inductiveProbe 34
@@ -23,20 +24,25 @@ constexpr int EEPROM_ADDRESS = 0;
 // --- DYNAMIC CONTROL STATE ---
 float brake_avg = 1.0f;
 float target_velocity = 0.0f;
-int current_odrive_mode = 2;      // 1 = Torque (Coast/Brake), 2 = Velocity (Push)
-float target_motor_torque = 0.0f; // <--- ADD THIS GLOBAL VARIABLE HERE!
+float target_motor_torque = 0.0f;
+float dashboard_target_val = 0.0f; // <--- MOVED TO GLOBAL SCOPE!
+int current_odrive_mode = 2;
+bool isBraking = false;
+bool isUpdating = false;
 
 unsigned long last_cmd_time = 0;
 unsigned long last_dashboard_time = 0;
-bool isUpdating = false;
 
-// --- DASHBOARD CALLBACKS ---
+// =======================================================
+// CALLBACKS FROM BLE DASHBOARD
+// =======================================================
 void triggerEEPROMSave()
 {
   EEPROM.put(EEPROM_ADDRESS, deviceInfo);
   EEPROM.commit();
   addLog("Settings saved to EEPROM!");
 }
+
 void triggerOTA()
 {
   deviceInfo.maintenanceMode = true;
@@ -45,6 +51,7 @@ void triggerOTA()
   delay(500);
   ESP.restart();
 }
+
 void triggerScan()
 {
   deviceInfo.SCAN_FOR_DEVICE = true;
@@ -53,22 +60,29 @@ void triggerScan()
   delay(500);
   ESP.restart();
 }
+
 void triggerWiFiSave(String s, String p)
 {
   strlcpy(deviceInfo.home_ssid, s.c_str(), sizeof(deviceInfo.home_ssid));
   strlcpy(deviceInfo.home_pass, p.c_str(), sizeof(deviceInfo.home_pass));
   triggerEEPROMSave();
+  addLog("WiFi Saved! Rebooting...");
   delay(500);
   ESP.restart();
 }
 
-// --- BRAKING FILTER ---
+// =======================================================
+// BRAKING LOGIC (Low Pass Filter P-Controller)
+// =======================================================
 void updateBrakeLogic()
 {
   int currentProbeAnalog = analogRead(inductiveProbe);
+
+  // Hardcoded Threshold (2000)
+  // -1.0 = compressed (braking), 1.0 = relaxed (pushing)
   float target_state = (currentProbeAnalog < 2000) ? -1.0f : 1.0f;
 
-  float dt = 0.02f;
+  float dt = 0.02f; // We run this at 50Hz (20ms)
   float tau = deviceInfo.brakeTimeConstant;
   if (tau < 0.01f)
     tau = 0.01f;
@@ -77,12 +91,15 @@ void updateBrakeLogic()
   brake_avg = (alpha * target_state) + ((1.0f - alpha) * brake_avg);
 }
 
-// --- OTA MODE ---
+// =======================================================
+// OTA MAINTENANCE MODE
+// =======================================================
 void runMaintenanceMode()
 {
   deviceInfo.maintenanceMode = false;
   EEPROM.put(EEPROM_ADDRESS, deviceInfo);
   EEPROM.commit();
+
   WiFi.mode(WIFI_STA);
   WiFi.begin(deviceInfo.home_ssid, deviceInfo.home_pass);
   int attempts = 0;
@@ -102,10 +119,12 @@ void runMaintenanceMode()
   {
     WiFi.mode(WIFI_AP);
     WiFi.softAP("ESP-Maintenance", "12345678");
+    addLog("WiFi failed. Started AP: ESP-Maintenance");
   }
 
   ArduinoOTA.setHostname("odrive-node");
   ArduinoOTA.begin();
+
   while (true)
   {
     ArduinoOTA.handle();
@@ -113,9 +132,13 @@ void runMaintenanceMode()
   }
 }
 
+// =======================================================
+// SETUP
+// =======================================================
 void setup()
 {
   Serial.begin(115200);
+
   EEPROM.begin(EEPROM_SIZE);
   EEPROM.get(EEPROM_ADDRESS, deviceInfo);
 
@@ -123,15 +146,18 @@ void setup()
   digitalWrite(pullupPowerPin, HIGH);
   pinMode(inductiveProbe, INPUT);
 
+  // EEPROM Data Integrity Check
   if (deviceInfo.torqueMultiplier < 0 || isnan(deviceInfo.torqueMultiplier) || deviceInfo.home_ssid[0] == 255)
   {
-    deviceInfo.torqueMultiplier = 1.0; // Default Accel Rate
-    deviceInfo.brakeTimeConstant = 1.0;
+    // deviceInfo.brakingThreshold DELETED FROM HERE!
+    deviceInfo.torqueMultiplier = 1.0;  // Default Accel Rate
+    deviceInfo.brakeTimeConstant = 1.0; // Default smoothing (1.0 sec)
     strncpy(deviceInfo.home_ssid, "wlesswg", 31);
     strncpy(deviceInfo.home_pass, "hba.1245", 63);
     deviceInfo.maintenanceMode = false;
     EEPROM.put(EEPROM_ADDRESS, deviceInfo);
     EEPROM.commit();
+    Serial.println("EEPROM Reset to defaults.");
   }
 
   if (deviceInfo.maintenanceMode)
@@ -141,15 +167,20 @@ void setup()
 
   odrive.begin(CAN_TX_PIN, CAN_RX_PIN);
   delay(250);
-  odrive.setMode(2, 1); // Boot into Velocity Mode
+
+  odrive.setMode(2, 1);
   delay(50);
   odrive.setVelocity(0.0);
   delay(10);
   odrive.setState(8);
 
   cadenceSensor.begin(deviceInfo.SCAN_FOR_DEVICE, deviceInfo.macAddress, deviceInfo.addressType);
+  addLog("System Online.");
 }
 
+// =======================================================
+// MAIN LOOP
+// =======================================================
 void loop()
 {
   ArduinoOTA.handle();
@@ -171,6 +202,7 @@ void loop()
     deviceInfo.SCAN_FOR_DEVICE = false;
     triggerEEPROMSave();
     cadenceSensor.clearNewDeviceFlag();
+    addLog("Cadence Sensor paired & saved!");
   }
 
   // --- 50Hz VELOCITY INTEGRATOR ---
@@ -179,15 +211,18 @@ void loop()
     last_cmd_time = millis();
     updateBrakeLogic();
 
-    // Read the live physical speed of the wheel
     float actual_velocity = odrive.getVelocity();
     if (actual_velocity < 0.0f)
       actual_velocity = 0.0f;
 
+    // REMOVED FLOAT KEYWORD! Uses global now!
+    dashboard_target_val = 0.0f;
+
     if (brake_avg < -0.5f)
     {
-      // --- ZONE 1: ACTIVE BRAKING ---
-      // Switch to Torque mode for proportional smooth braking
+      // --- ZONE 1: ACTIVE BRAKING (-0.5 to -1.0) ---
+      isBraking = true;
+
       if (current_odrive_mode != 1)
       {
         odrive.setMode(1, 1);
@@ -197,66 +232,57 @@ void loop()
       if (actual_velocity > 0.05f)
       {
         float brake_factor = (abs(brake_avg) - 0.5f) / 0.5f;
-        odrive.setTorque(-15.0f * brake_factor); // Max regen limit: 15 Amps
+
+        target_motor_torque = -15.0f * brake_factor;
+        odrive.setTorque(target_motor_torque);
+        dashboard_target_val = target_motor_torque;
       }
       else
       {
-        odrive.setTorque(0.0f); // Stop braking at a standstill
+        odrive.setTorque(0.0f);
+        dashboard_target_val = 0.0f;
       }
-
-      // Keep the internal integrator synced so it doesn't jerk when you start pedaling again!
       target_velocity = actual_velocity;
     }
-    else if (cadenceSensor.getCadence() == 0)
+    else if (cadenceSensor.getCadence() == 0 || brake_avg <= 0.1f)
     {
-      // --- ZONE 2: COASTING (No Pedaling) ---
-      // Switch to Torque Mode to perfectly freewheel!
+      // --- ZONE 2: COASTING & DEADBAND (-0.5 to 0.1) ---
+      isBraking = false;
+
       if (current_odrive_mode != 1)
       {
         odrive.setMode(1, 1);
         current_odrive_mode = 1;
       }
-      odrive.setTorque(0.0f);
 
-      // Keep synced!
+      odrive.setTorque(0.0f);
       target_velocity = actual_velocity;
+      dashboard_target_val = 0.0f;
     }
     else
     {
-      // --- ZONE 3: VELOCITY SPEED-MATCHING (Pedaling) ---
-      // Switch back to Velocity mode to push the bike!
+      // --- ZONE 3: VELOCITY PUSH (0.1 to 1.0) ---
+      isBraking = false;
+
       if (current_odrive_mode != 2)
       {
         odrive.setMode(2, 1);
         current_odrive_mode = 2;
       }
 
-      float speed_change = 0.0f;
-      float accel_rate = deviceInfo.torqueMultiplier; // Re-using this setting as Accel Rate!
+      float accel_rate = deviceInfo.torqueMultiplier;
+      float push_factor = (brake_avg - 0.1f) / 0.9f;
 
-      // Push Zone
-      if (brake_avg > 0.1f)
-      {
-        speed_change = (brake_avg - 0.1f) * accel_rate * 0.02f; // dt = 0.02s
-      }
-      // Coast Zone (Trailer overrunning bike slightly, gently reduce speed)
-      else if (brake_avg < -0.1f)
-      {
-        speed_change = (brake_avg + 0.1f) * accel_rate * 0.02f;
-      }
-
+      float speed_change = push_factor * accel_rate * 0.02f;
       target_velocity += speed_change;
 
-      // --- THE 28-INCH SPEED LIMIT (25 km/h) ---
-      if (target_velocity < 0.0f)
-        target_velocity = 0.0f;
       if (target_velocity > 3.2f)
         target_velocity = 3.2f;
 
       odrive.setVelocity(target_velocity);
+      dashboard_target_val = target_velocity;
     }
 
-    // Telemetry Requests
     odrive.requestData(CMD_GET_ENCODER_ESTIMATES);
     odrive.requestData(CMD_GET_IQC);
     odrive.requestData(CMD_GET_VBUS_VOLTAGE);
@@ -267,10 +293,15 @@ void loop()
   {
     last_dashboard_time = millis();
 
-    // Calculate mechanical power
-    float mech_power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
+    TelemetryData td;
+    td.cadence = cadenceSensor.getCadence();
+    td.mech_power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
+    td.vbus = odrive.getVoltage();
+    td.phase_current = odrive.getCurrent();
+    td.brake_filter = brake_avg;
+    td.target_val = dashboard_target_val;
+    td.odrive_mode = current_odrive_mode;
 
-    // Send it to the Dashboard library to handle the JSON and transmission!
-    dash_sendTelemetry(cadenceSensor.getCadence(), mech_power, odrive.getVoltage(), odrive.getCurrent(), brake_avg, target_motor_torque);
+    dash_sendTelemetry(td);
   }
 } // <-- End of loop()
