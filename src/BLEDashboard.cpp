@@ -1,4 +1,3 @@
-// BLEDashboard.cpp
 #include "BLEDashboard.h"
 #include <NimBLEDevice.h>
 
@@ -24,6 +23,7 @@ void addLog(const char *msg)
   if (msg_len > 256)
     return;
   int cur_len = strlen(log_buffer);
+
   if (cur_len + msg_len + 2 > sizeof(log_buffer))
   {
     int shift = (cur_len + msg_len + 2) - sizeof(log_buffer);
@@ -40,6 +40,7 @@ void addLog(const char *msg)
   }
   strcat(log_buffer, msg);
   strcat(log_buffer, "\n");
+
   if (deviceConnected && pLogCharacteristic != NULL)
   {
     pLogCharacteristic->setValue((uint8_t *)msg, strlen(msg));
@@ -51,6 +52,7 @@ class MyServerCallbacks : public NimBLEServerCallbacks
 {
   void onConnect(NimBLEServer *pServer, ble_gap_conn_desc *desc)
   {
+    pServer->updateConnParams(desc->conn_handle, 12, 12, 0, 60);
     phone_conn_id = desc->conn_handle;
     deviceConnected = true;
     addLog("[BLE] Dashboard Connected!");
@@ -82,20 +84,26 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
         triggerEEPROMSave();
       else if (rxValue == "GET")
       {
-        char msg[150];
-        snprintf(msg, sizeof(msg), "{\"cfg\":1,\"tm\":%.2f,\"tc\":%.2f,\"s\":\"%s\"}",
-                 deviceInfo.torqueMultiplier, deviceInfo.brakeTimeConstant, deviceInfo.home_ssid);
+        char msg[200];
+        snprintf(msg, sizeof(msg), "{\"cfg\":1,\"kp\":%.2f,\"ki\":%.2f,\"ms\":%.2f,\"tc\":%.2f,\"s\":\"%s\"}",
+                 deviceInfo.vel_Kp, deviceInfo.vel_Ki, deviceInfo.max_speed,
+                 deviceInfo.brakeTimeConstant, deviceInfo.home_ssid);
         pTxCharacteristic->setValue((uint8_t *)msg, strlen(msg));
         pTxCharacteristic->notify();
       }
       else if (rxValue.startsWith("CFG:"))
       {
-        // Parse CFG:tm:tc
+        // Parse CFG:kp:ki:ms:tc
         int s1 = rxValue.indexOf(':', 4);
-        if (s1 > 0)
+        int s2 = rxValue.indexOf(':', s1 + 1);
+        int s3 = rxValue.indexOf(':', s2 + 1);
+
+        if (s1 > 0 && s2 > 0 && s3 > 0)
         {
-          deviceInfo.torqueMultiplier = rxValue.substring(4, s1).toFloat();
-          deviceInfo.brakeTimeConstant = rxValue.substring(s1 + 1).toFloat();
+          deviceInfo.vel_Kp = rxValue.substring(4, s1).toFloat();
+          deviceInfo.vel_Ki = rxValue.substring(s1 + 1, s2).toFloat();
+          deviceInfo.max_speed = rxValue.substring(s2 + 1, s3).toFloat();
+          deviceInfo.brakeTimeConstant = rxValue.substring(s3 + 1).toFloat();
           addLog("Live Tuning Updated.");
         }
       }
@@ -135,14 +143,14 @@ void dash_loop()
   }
 }
 
-// ... (Rest of file remains the same)
-
-void dash_sendTelemetry(TelemetryData &d) {
-  if (deviceConnected) {
+void dash_sendTelemetry(int cadence, float power, float voltage, float current, float brake_avg, float target_val, float actual_vel, int mode)
+{
+  if (deviceConnected)
+  {
     char json[150];
-    snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"a\":%.1f,\"pr\":%.2f,\"tq\":%.2f,\"m\":%d}", 
-             d.cadence, d.mech_power, d.vbus, d.phase_current, d.brake_filter, d.target_val, d.odrive_mode);
-    pTxCharacteristic->setValue((uint8_t*)json, strlen(json));
+    snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"a\":%.1f,\"pr\":%.2f,\"tq\":%.2f,\"av\":%.2f,\"m\":%d}",
+             cadence, power, voltage, current, brake_avg, target_val, actual_vel, mode);
+    pTxCharacteristic->setValue((uint8_t *)json, strlen(json));
     pTxCharacteristic->notify();
   }
 }
