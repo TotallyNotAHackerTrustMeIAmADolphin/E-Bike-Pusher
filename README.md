@@ -64,11 +64,11 @@ The ESP32 reads `brake_avg` and dynamically changes the ODrive's physics mode on
     *   *Safety:* Regenerative braking is strictly disabled if the wheel's forward velocity drops below `0.05 rev/s`. This prevents the trailer from pulling the bicycle backward at a stoplight.
     *   *Anti-Jerk:* The internal velocity integrator (`I_out`) is continuously anchored to the wheel's actual rolling speed so the system is ready to resume pushing seamlessly.
 
-*   **ZONE 2: Coasting & Deadband (`cadence == 0` AND `brake_avg > -0.5)**
+*   **ZONE 2: Coasting & Deadband (`cadence == 0` AND `brake_avg > -0.5`)**
     *   *ODrive Mode:* Torque Control.
     *   *Action:* Commands `0.0A` of torque, allowing the motor to perfectly freewheel. The velocity integrator remains anchored.
 
-*   **ZONE 3: PID Velocity Push (`cadence > 0` AND `brake_avg > -0.5)**
+*   **ZONE 3: PID Velocity Push (`cadence > 0` AND `brake_avg > -0.5`)**
     *   *ODrive Mode:* Velocity Control.
     *   *Action:* The trailer becomes a Speed-Matcher. It uses a **PID Controller** where `Error = brake_avg`.
     *   **P-Term (Kp):** The instant "Punch." Applies immediate speed when the hitch stretches.
