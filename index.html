@@ -44,6 +44,10 @@
       letter-spacing: 1px;
     }
 
+    .alert {
+      color: #ff3b30 !important;
+    }
+
     .panel {
       background: #1a1a1a;
       padding: 15px;
@@ -53,7 +57,7 @@
     }
 
     input {
-      width: 90px;
+      width: 80px;
       padding: 5px;
       background: #333;
       color: white;
@@ -117,20 +121,20 @@
       <div class="val" id="pwr">--</div>
     </div>
     <div class="card">
-      <div class="lbl">Batt (V)</div>
+      <div class="lbl">Battery (V)</div>
       <div class="val" id="vol">--</div>
     </div>
     <div class="card">
-      <div class="lbl">Brake Factor</div>
-      <div class="val" id="bfac">--</div>
+      <div class="lbl">Filter</div>
+      <div class="val" id="prb">--</div>
     </div>
     <div class="card">
-      <div class="lbl">Phase (A)</div>
-      <div class="val" id="amp">--</div>
-    </div>
-    <div class="card">
-      <div class="lbl">Target Tq (A)</div>
+      <div class="lbl">Target Vel</div>
       <div class="val" id="tq">--</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Mode</div>
+      <div class="val" id="mod">--</div>
     </div>
   </div>
 
@@ -141,7 +145,8 @@
 
   <div class="panel">
     <h3 style="margin-top:0; color:#aaa;">Live Tuning</h3>
-    <p>Max Push Force (A): <input type="number" step="0.1" id="tm" oninput="sendTuning()"></p>
+    <!-- tm is now the Acceleration Rate! -->
+    <p>Accel Rate: <input type="number" step="0.1" id="tm" oninput="sendTuning()"></p>
     <p>Filter Time (s): <input type="number" step="0.1" id="tc" oninput="sendTuning()"></p>
     <button onclick="commitSettings()">Save to Flash</button>
     <hr style="border-color:#333; margin:15px 0;">
@@ -158,26 +163,18 @@
     const TX_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
     const RX_UUID = "828917c1-ea55-4d4a-a66e-fd202cea0645";
     const LOG_UUID = "5111b1db-2917-48f8-b3d5-e51c8f35fc06";
-
     let bleRxChar = null;
-    let bleDevice = null;
-    let tuneTimer = null;
 
     async function connectBLE() {
       try {
-        bleDevice = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'E-Bike Pusher' }],
-          optionalServices: [SERVICE_UUID]
-        });
-
-        bleDevice.addEventListener('gattserverdisconnected', () => {
+        const device = await navigator.bluetooth.requestDevice({ filters: [{ name: 'E-Bike Pusher' }], optionalServices: [SERVICE_UUID] });
+        device.addEventListener('gattserverdisconnected', () => {
           document.getElementById("connectBtn").innerText = "Connect to Bike";
           document.getElementById("connectBtn").style.background = "#00d2ff";
           bleRxChar = null;
         });
-
         document.getElementById("connectBtn").innerText = "Connecting...";
-        const server = await bleDevice.gatt.connect();
+        const server = await device.gatt.connect();
         const service = await server.getPrimaryService(SERVICE_UUID);
 
         bleRxChar = await service.getCharacteristic(RX_UUID);
@@ -186,28 +183,22 @@
 
         await txChar.startNotifications();
         txChar.addEventListener('characteristicvaluechanged', handleTelemetry);
-
         await logChar.startNotifications();
         logChar.addEventListener('characteristicvaluechanged', (e) => {
-          const msg = new TextDecoder().decode(e.target.value);
           let logbox = document.getElementById("syslog");
-          logbox.value += msg + "\n";
+          logbox.value += new TextDecoder().decode(e.target.value) + "\n";
           logbox.scrollTop = logbox.scrollHeight;
         });
 
         document.getElementById("connectBtn").innerText = "Connected!";
         document.getElementById("connectBtn").style.background = "#00ea8d";
         setTimeout(() => sendCommand("GET"), 500);
-      } catch (e) {
-        console.error(e);
-        document.getElementById("connectBtn").innerText = "Connect to Bike";
-      }
+      } catch (e) { document.getElementById("connectBtn").innerText = "Connect to Bike"; }
     }
 
     function handleTelemetry(event) {
-      const value = new TextDecoder().decode(event.target.value);
       try {
-        const d = JSON.parse(value);
+        const d = JSON.parse(new TextDecoder().decode(event.target.value));
         if (d.cfg) {
           document.getElementById("tm").value = d.tm.toFixed(2);
           document.getElementById("tc").value = d.tc.toFixed(2);
@@ -218,22 +209,22 @@
         document.getElementById("cad").innerText = d.c;
         document.getElementById("pwr").innerText = d.p.toFixed(0);
         document.getElementById("vol").innerText = d.v.toFixed(1);
-        document.getElementById("amp").innerText = d.a.toFixed(1);
-        document.getElementById("bfac").innerText = d.bf.toFixed(2);
+        document.getElementById("prb").innerText = d.pr.toFixed(2);
 
         let tqElement = document.getElementById("tq");
         tqElement.innerText = d.tq.toFixed(2);
-        tqElement.style.color = (d.tq < 0) ? "#ff3b30" : "#00ea8d";
+
+        // Show the active Control Mode
+        let modElement = document.getElementById("mod");
+        if (d.m === 1) { modElement.innerText = "TORQUE"; modElement.style.color = "#ff9500"; }
+        else { modElement.innerText = "VELOCITY"; modElement.style.color = "#00d2ff"; }
+
       } catch (e) { }
     }
 
-    async function sendCommand(cmd) {
-      if (!bleRxChar) return;
-      try {
-        await bleRxChar.writeValue(new TextEncoder().encode(cmd));
-      } catch (e) { console.error("Send failed", e); }
-    }
+    async function sendCommand(cmd) { if (bleRxChar) await bleRxChar.writeValue(new TextEncoder().encode(cmd)); }
 
+    let tuneTimer;
     function sendTuning() {
       clearTimeout(tuneTimer);
       tuneTimer = setTimeout(() => {
@@ -244,12 +235,7 @@
     }
 
     function commitSettings() { sendCommand("SAVE"); alert("Saved to Flash!"); }
-    function saveWiFi() {
-      let s = document.getElementById("ssid").value;
-      let p = document.getElementById("psk").value;
-      sendCommand(`WIFI:${s}:${p}`);
-      alert("WiFi Saved! Rebooting...");
-    }
+    function saveWiFi() { sendCommand(`WIFI:${document.getElementById("ssid").value}:${document.getElementById("psk").value}`); alert("WiFi Saved!"); }
   </script>
 </body>
 
