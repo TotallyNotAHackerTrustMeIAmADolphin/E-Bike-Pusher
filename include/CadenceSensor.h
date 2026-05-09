@@ -1,3 +1,4 @@
+// CadenceSensor.h
 #ifndef CADENCE_SENSOR_H
 #define CADENCE_SENSOR_H
 

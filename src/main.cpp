@@ -1,3 +1,4 @@
+// main.cpp
 #include <Arduino.h>
 #include <WiFi.h>
 #include <DNSServer.h>
@@ -22,7 +23,8 @@ constexpr int EEPROM_ADDRESS = 0;
 // --- DYNAMIC CONTROL STATE ---
 float brake_avg = 1.0f;
 float target_velocity = 0.0f;
-int current_odrive_mode = 2; // 1 = Torque (Coast/Brake), 2 = Velocity (Push)
+int current_odrive_mode = 2;      // 1 = Torque (Coast/Brake), 2 = Velocity (Push)
+float target_motor_torque = 0.0f; // <--- ADD THIS GLOBAL VARIABLE HERE!
 
 unsigned long last_cmd_time = 0;
 unsigned long last_dashboard_time = 0;
@@ -264,15 +266,11 @@ void loop()
   if (millis() - last_dashboard_time >= 500)
   {
     last_dashboard_time = millis();
+
+    // Calculate mechanical power
     float mech_power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
 
-    if (deviceConnected)
-    {
-      char json[128];
-      snprintf(json, sizeof(json), "{\"c\":%d,\"p\":%.1f,\"v\":%.1f,\"pr\":%.2f,\"tq\":%.2f,\"m\":%d}",
-               cadenceSensor.getCadence(), mech_power, odrive.getVoltage(), brake_avg, target_velocity, current_odrive_mode);
-      pTxCharacteristic->setValue((uint8_t *)json, strlen(json));
-      pTxCharacteristic->notify();
-    }
+    // Send it to the Dashboard library to handle the JSON and transmission!
+    dash_sendTelemetry(cadenceSensor.getCadence(), mech_power, odrive.getVoltage(), odrive.getCurrent(), brake_avg, target_motor_torque);
   }
-}
+} // <-- End of loop()
