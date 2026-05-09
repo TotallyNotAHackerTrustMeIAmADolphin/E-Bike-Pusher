@@ -1,7 +1,6 @@
-// ODriveCAN.cpp
 #include "ODriveCAN.h"
 
-ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0) {}
+ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0), odrv_state(1), odrv_error(0) {}
 
 bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin)
 {
@@ -21,27 +20,34 @@ bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin)
 
 void ODriveCAN::twai_send(uint32_t cmd_id, uint8_t *data, uint8_t len)
 {
-  // THE FIX: Zero initialize first, then set properties safely!
   twai_message_t msg = {};
   msg.identifier = (node_id << 5) | cmd_id;
   msg.extd = 0;
   msg.rtr = 0;
   msg.data_length_code = len;
 
-  memcpy(msg.data, data, len);
+  // Safely copy data ONLY if there is data to send!
+  if (len > 0 && data != nullptr)
+  {
+    memcpy(msg.data, data, len);
+  }
   twai_transmit(&msg, 0);
 }
 
 void ODriveCAN::requestData(uint8_t cmd_id)
 {
-  // THE FIX: Zero initialize first!
   twai_message_t msg = {};
   msg.identifier = (node_id << 5) | cmd_id;
   msg.extd = 0;
   msg.rtr = 1;
   msg.data_length_code = 0;
-
   twai_transmit(&msg, 0);
+}
+
+void ODriveCAN::clearErrors()
+{
+  // Clear Errors command has a payload length of 0!
+  twai_send(CMD_CLEAR_ERRORS, nullptr, 0);
 }
 
 void ODriveCAN::poll()
@@ -69,6 +75,12 @@ void ODriveCAN::poll()
       {
         memcpy(&odrv_vbus, &msg.data[0], 4);
         memcpy(&odrv_ibus, &msg.data[4], 4);
+      }
+      else if (cmd_id == CMD_HEARTBEAT)
+      {
+        // THE FIX: Save the Heartbeat Status!
+        memcpy(&odrv_error, &msg.data[0], 4); // Bytes 0-3 are the Error Code
+        odrv_state = msg.data[4];             // Byte 4 is the Axis State
       }
     }
   }
@@ -107,3 +119,4 @@ float ODriveCAN::getVelocity() const { return odrv_vel; }
 float ODriveCAN::getCurrent() const { return odrv_current; }
 float ODriveCAN::getVoltage() const { return odrv_vbus; }
 float ODriveCAN::getBusCurrent() const { return odrv_ibus; }
+uint8_t ODriveCAN::getState() const { return odrv_state; } // NEW

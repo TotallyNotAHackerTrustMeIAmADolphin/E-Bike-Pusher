@@ -179,6 +179,24 @@ void loop()
     last_cmd_time = millis();
     updateBrakeLogic();
 
+    // =======================================================
+    // THE AUTO-REVIVE FIX!
+    // If the ODrive is not in Closed Loop (State 8), it dropped out.
+    // Every 2 seconds, we try to clear the watchdog error and re-arm it!
+    // =======================================================
+    if (odrive.getState() != 8)
+    {
+      static unsigned long last_revive_time = 0;
+      if (millis() - last_revive_time > 2000)
+      {
+        last_revive_time = millis();
+        odrive.clearErrors();
+        delay(1);
+        odrive.setState(8);
+        addLog("ODrive Disarmed! Waking it back up...");
+      }
+    }
+
     float actual_velocity = odrive.getVelocity();
     if (actual_velocity < 0.0f)
       actual_velocity = 0.0f;
