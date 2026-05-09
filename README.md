@@ -1,117 +1,120 @@
+
+
 ***
 
 # 🚲 E-Bike Autonomous Pusher-Trailer
 
 ## 📌 Project Overview
-This project controls an autonomous E-Bike "Pusher" Trailer using an **ESP32**, an **MKS ODrive Mini V1.0**, and a 1000W Direct-Drive Hub Motor. 
+This project is a custom ESP32-based control system for an autonomous E-Bike "Pusher" Trailer. Instead of using a traditional handlebar throttle, the system acts as a robotic follower. It calculates the physical equilibrium between the bicycle and the trailer using a **Digital Inductive Hitch Sensor**, pairs it with a **Bluetooth (BLE) Cadence Sensor** to ensure legal pedaling, and commands a 1000W Hub motor to seamlessly push the rider.
 
-Instead of traditional throttles, the trailer uses a **Digital Inductive Hitch Probe** and a **Bluetooth (BLE) Cadence Sensor**. The ESP32 mathematically converts the digital hitch switch into a smooth analog signal, feeding it into a custom **PID Velocity Controller**. The result is a trailer that completely "disappears," seamlessly speed-matching the bicycle, coasting down hills, and aggressively regen-braking when the bike slows down.
-
-The system features a **Web Bluetooth (WebBLE) Dashboard** for live PID tuning on the road, and an Over-The-Air (OTA) maintenance mode for wireless firmware updates.
+The core firmware relies heavily on custom PID Control Theory to dynamically switch between **Velocity Control** (for buttery-smooth pushing) and **Torque Control** (for freewheeling and active regenerative braking) at 50Hz over a CAN bus.
 
 ---
 
-## 🛠 Hardware & Wiring
+## 🛠 Hardware Setup & Wiring
 
-### 1. Microcontroller (ESP32 NodeMCU/WROOM32D)
-*   **GPIO 17 (TX) & GPIO 16 (RX):** 3.3V CAN Bus Transceiver (e.g., SN65HVD230).
-*   **GPIO 34 (Input):** Inductive Brake Probe Signal. 
-*   **GPIO 33 (Output HIGH):** Dedicated 3.3V Power Bus. 
-    *   *Hardware Hack:* GPIO 34 lacks internal pull-up resistors. A physical 10kΩ resistor connects GPIO 33 to GPIO 34 to prevent the pin from floating when the 12V inductive sensor diode is reverse-biased.
+### 1. Microcontroller: ESP32 (NodeMCU-32S / WROOM32D)
+*   **GPIO 17 (TX) & GPIO 16 (RX):** Connected to a 3.3V CAN Transceiver (e.g., SN65HVD230).
+*   **GPIO 34 (Input):** Inductive Brake Probe Signal. *(Reads `LOW` when the trailer pushes against the bike hitch).*
+*   **GPIO 33 (Output HIGH):** Acts as a dedicated 3.3V power bus. Connected to GPIO 34 via a physical **10kΩ Pull-Up Resistor** (Required because GPIO 34 lacks internal pull-up silicon).
 
-### 2. Motor Controller (MKS ODrive Mini V1.0)
+### 2. Motor Controller: MKS ODrive Mini V1.0
+*   **Hardware:** Clone of ODrive v3.6 (56V architecture).
 *   **Firmware:** Factory v0.5.1. *(⚠️ **WARNING:** Do NOT flash official ODrive firmware onto this board. MKS pin-routing differences will permanently brick the CAN transceiver!)*
-*   **CAN Bus:** 250k baud, Node ID: 0. **120Ω Termination DIP switch MUST be ON.**
-*   **Motor Setup:** 1000W Direct Drive Hub Motor. **23 Pole Pairs** (46 magnets), Hall Effect Sensors.
-*   **Power:** 24V Battery stepped up via Boost Converter.
+*   **CAN Bus:** Connected to the ESP32. The tiny **120R Termination DIP switch MUST be ON**. Baudrate: `250000`. Node ID: `0`.
+*   **Motor:** 1000W Direct Drive Hub Motor (28-inch wheel, 45mm tire). **23 Pole Pairs** (46 magnets) with Hall Effect Sensors.
+
+### 3. Power Electronics
+*   **Battery:** 24V (or 36V/48V) Lithium Battery.
+*   **Boost Converter:** Steps up voltage if required. *(⚠️ **CRITICAL:** Because boost converters block reverse current, 100% of regenerative braking energy is dumped into the ODrive's Brake Resistor. Monitor resistor temps closely!)*
 
 ---
 
-## 🧠 Control Theory & Physics
+## 📱 The WebBLE Dashboard & Live Tuning
 
-The ESP32 completely bypasses the ODrive's internal trajectory planners and runs its own 50Hz physics engine.
+To eliminate the "Radio Coexistence" bug (where WiFi and Bluetooth fight for the ESP32's antenna and crash the board), **WiFi is permanently disabled during riding.**
 
-### 1. The "Digital-to-Analog" Hitch Filter
-The inductive probe on the trailer hitch is a pure digital switch: it is either compressed (pushing the bike) or extended (lagging behind). Using raw digital inputs causes violent "Bang-Bang" oscillation. 
+The interface is hosted entirely via **Web Bluetooth (WebBLE)**.
+👉 **[Access the Dashboard Here](https://totallynotahackertrustmeiamadolphin.github.io/E-Bike-Pusher/)**
 
-To fix this, the ESP32 reads the probe at 50Hz and passes it through an **Exponential Moving Average (EMA) Low-Pass Filter**.
-*   The raw state is mapped to **-1.0 (Compressed/Braking)** and **1.0 (Extended/Pushing)**.
-*   The filter uses a `brakeTimeConstant` (e.g., 1.0 seconds) defined by the user in the Dashboard.
-*   *Result:* We get `brake_avg`, a buttery-smooth floating-point variable that smoothly glides between `-1.0` and `1.0`.
+### How to use it:
+1. Open the link in a WebBLE-compatible browser (Chrome/Edge/Brave on PC/Android, or **Bluefy** on iOS).
+2. Click **Connect to Bike**. The dashboard will instantly populate with your saved tuning parameters and begin streaming 2Hz telemetry.
+3. **Live Tuning:** Adjust the PID or Threshold values. The ESP32 instantly applies them to RAM for live test-riding.
+4. **Save to Flash:** Locks your perfect tune into the ESP32's EEPROM permanently.
+
+---
+
+## 🧠 Control Theory & Physics (The "Equilibrium" Controller)
+
+The magic of this system is how it converts a harsh binary sensor into a buttery-smooth proportional speed-matcher.
+
+### 1. The Digital-to-Analog Filter (`brake_avg`)
+The inductive probe is a digital switch: it is either `1` (Hitch Extended) or `-1` (Hitch Compressed). 
+At 50Hz, the ESP32 feeds this `1` or `-1` state into an **Exponential Moving Average (EMA) Low-Pass Filter**. The filter's speed is dictated by the `Filter Time (s)` parameter on the dashboard.
+*   The result is `brake_avg`: A floating-point number that slides smoothly between `-1.0` and `1.0`.
+*   If the trailer lightly taps the bike, `brake_avg` drops to `0.8`. If it crashes into the bike, it plunges to `-1.0`.
 
 ### 2. The 3-Zone State Machine
-The ESP32 dynamically switches the ODrive's internal physics mode on the fly over the CAN bus to mimic how a car works:
+The ESP32 reads `brake_avg` and dynamically changes the ODrive's physics mode on the fly:
 
-*   🔴 **ZONE 1: Active Braking** (`brake_avg < -0.5`)
-    *   **Mode:** Torque Control (`1`).
-    *   **Action:** Proportional Regenerative Braking. As the hitch compresses further, negative Amps are sent to the motor.
-    *   **Safety Lock:** Braking is *only* permitted if the wheel velocity is `> 0.05 rev/s`. This prevents the trailer from rolling backward at a stoplight.
-*   ⚪ **ZONE 2: Coasting / Deadband** (`brake_avg` between `-0.5` and `0.1` OR `cadence == 0`)
-    *   **Mode:** Torque Control (`1`).
-    *   **Action:** Commands `0.0A`. The motor acts as a perfect freewheel. 
-*   🟢 **ZONE 3: Speed-Matching Push** (`brake_avg > 0.1` AND `cadence > 0`)
-    *   **Mode:** Velocity Control (`2`).
-    *   **Action:** The Custom PID Controller engages.
+*   **ZONE 1: Active Braking (`brake_avg < -0.5`)**
+    *   *ODrive Mode:* Torque Control.
+    *   *Action:* Applies proportional negative torque (Regen Braking). Maxes out at -15.0A.
+    *   *Safety:* Regenerative braking is strictly disabled if the wheel's forward velocity drops below `0.05 rev/s`. This prevents the trailer from pulling the bicycle backward at a stoplight.
+    *   *Anti-Jerk:* The internal velocity integrator (`I_out`) is continuously anchored to the wheel's actual rolling speed so the system is ready to resume pushing seamlessly.
 
-### 3. The Custom PID Velocity Controller
-When in Zone 3, the ESP32 calculates a `target_velocity` to send to the ODrive. The `brake_avg` acts as the **Error** for the PID loop.
+*   **ZONE 2: Coasting & Deadband (`cadence == 0` OR `-0.5 <= brake_avg <= 0.1`)**
+    *   *ODrive Mode:* Torque Control.
+    *   *Action:* Commands `0.0A` of torque, allowing the motor to perfectly freewheel. The velocity integrator remains anchored.
 
-*   **P (Proportional - The "Punch"):** Reacts instantly to how far the hitch is stretched. Helps the trailer launch aggressively from a stoplight.
-*   **I (Integral - The "Cruising Speed"):** Slowly winds up over time to match the bicycle's exact cruising speed. 
-    *   *Anti-Windup:* Whenever the trailer enters Zone 1 (Braking) or Zone 2 (Coasting), the Integrator (`I_out`) is explicitly anchored to the wheel's `actual_velocity`. This ensures that when the user resumes pedaling, the motor picks up *exactly* where it left off with zero jerk or stall.
-*   **D (Derivative - The "Shock Absorber"):** Reacts to how fast the hitch is moving. Dampens the target velocity to prevent the trailer from oscillating (spring-mass hunting) against the bike.
-*   **Speed Clamp:** Hard-capped at `max_speed` (e.g., 3.2 rev/s ≈ 25 km/h for a 28" wheel).
+*   **ZONE 3: PID Velocity Push (`cadence > 0` AND `brake_avg > 0.1`)**
+    *   *ODrive Mode:* Velocity Control.
+    *   *Action:* The trailer becomes a Speed-Matcher. It uses a **PID Controller** where `Error = brake_avg`.
+    *   **P-Term (Kp):** The instant "Punch." Applies immediate speed when the hitch stretches.
+    *   **I-Term (Ki):** The "Acceleration." Slowly builds up the target speed to match the bicycle's cruising velocity.
+    *   **D-Term (Kd):** The "Shock Absorber." Reacts to rapid changes in the hitch to prevent back-and-forth oscillation (surging).
 
 ---
 
-## 💻 Software Architecture
+## ⚙️ Initial ODrive Configuration (via `odrivetool`)
 
-*   **PlatformIO / Arduino Core v3.0+:** Built using `min_spiffs.csv` partitions to fit the massive Bluetooth libraries in flash memory.
-*   **NimBLE-Arduino:** The default ESP32 `Bluedroid` stack causes RAM fragmentation and crashes when acting as a Server (Dashboard) and Client (Cadence) simultaneously. The lightweight `NimBLE` library completely cures this.
-*   **WebBLE Dashboard:** The UI (`index.html`) is hosted externally on GitHub Pages. It connects directly from a smartphone to the ESP32 via Bluetooth. Live tuning commands (`CFG:`) are applied instantly to RAM. Clicking "Save" commits them to EEPROM.
-*   **Cadence Watchdog:** The Cadence sensor scans in a non-blocking background thread. If it drops, the ESP32 waits 2 seconds before forcing Cadence to 0. 
-
----
-
-## ⚙️ ODrive Configuration Quirks
-
-Due to the heavy hub motor and low-resolution Hall sensors, the ODrive requires specific tuning to prevent 30A current spikes and `DC_BUS_OVER_CURRENT` crashes.
-
-Run these in `odrivetool` over USB during initial setup:
+A virgin MKS ODrive Mini must be configured for a low-inductance, heavy Hub Motor. The native PID loops must be softened to prevent `DC_BUS_OVER_CURRENT` spikes.
 
 ```python
-# 1. Hall Sensor Config (Allow sloppy factory tolerances)
+# 1. Hall Sensor & Motor Math (Example: 23 Pole Pairs)
 odrv0.axis0.encoder.config.mode = 1
 odrv0.axis0.motor.config.pole_pairs = 23
 odrv0.axis0.encoder.config.cpr = 138
+
+# 2. Relax Hall Tolerances (Crucial for sloppy hub motors)
 odrv0.axis0.encoder.config.calib_range = 0.05
 odrv0.axis0.encoder.config.bandwidth = 50.0
 
-# 2. Calm the Current Controller (Prevents 30A Spikes!)
+# 3. Soften Current Controller (Prevents 30A ringing spikes)
 odrv0.axis0.motor.config.current_control_bandwidth = 20.0
-odrv0.axis0.motor.config.requested_current_range = 60.0
-odrv0.axis0.motor.config.current_lim = 25.0
 
-# 3. Soften Velocity PI (ESP32 handles the macro-PID)
+# 4. Soften Internal Velocity PI (Prevents jitter in Velocity Mode)
 odrv0.axis0.controller.config.vel_gain = 0.05
 odrv0.axis0.controller.config.vel_integrator_gain = 0.01
 
-# 4. Enable Watchdog (Deadman Switch)
-# If ESP32 crashes or CAN breaks, motor disarms in 0.5s.
+# 5. Boot Settings & Watchdog
+odrv0.axis0.config.startup_encoder_offset_calibration = False
+odrv0.axis0.config.startup_closed_loop_control = True
 odrv0.axis0.config.enable_watchdog = True
 odrv0.axis0.config.watchdog_timeout = 0.5
-
-# Save permanently
-odrv0.save_configuration()
 ```
-
-*(Note: The MKS v0.5.1 firmware lacks State 12 Hall Polarity calibration. If `CPR_POLEPAIRS_MISMATCH` occurs during setup, you must manually force `odrv0.axis0.motor.config.direction = 1` or `-1` before running State 7).*
+*Note: Makerbase (MKS) factory firmware v0.5.1 lacks the Hall Polarity Calibration step (State 12). If you get `CPR_POLEPAIRS_MISMATCH` errors during initial setup, motor direction must be forced manually (`odrv0.axis0.motor.config.direction = 1` or `-1`) before running State 7.*
 
 ---
 
-## 🚀 OTA Updates (Maintenance Mode)
-To prevent `Errno 104: Connection reset by peer` during OTA flashes, WiFi is completely disabled during normal riding.
-1.  Connect to the WebBLE Dashboard.
-2.  Click **OTA Maintenance Mode**.
-3.  The ESP32 saves a flag to EEPROM, shuts down the motor, kills the Bluetooth radio, and reboots.
-4.  Upon reboot, it connects to the Home WiFi network (or creates an AP) and idles securely, waiting for a PlatformIO flash.
+## 📡 OTA Updates & Maintenance Mode
+
+To flash new firmware Over-The-Air, click **"OTA Mode"** on the WebBLE Dashboard.
+1. The ESP32 saves a flag to EEPROM, safely disarms the ODrive motor, and reboots.
+2. Upon waking, the ESP32 bypasses all BLE and Motor logic.
+3. It spins up its WiFi radio, connects to your saved Home SSID (or creates a fallback AP named `ESP-Maintenance`), and waits for a PlatformIO OTA payload. 
+
+## 🔋 Safety Auto-Revive
+To conserve battery, the BLE Cadence Sensor goes to sleep when pedaling stops. The ESP32 utilizes the `NimBLE` library to run non-blocking background scans to re-pair with the sensor. 
+If scanning causes the ESP32 to drop CAN bus packets for >0.5 seconds, the ODrive's hardware Watchdog will kill the motor. The ESP32 actively monitors the ODrive's CAN Heartbeat; if it detects the motor has disarmed, it automatically issues a `CLEAR_ERRORS` command and re-arms the drive system to ensure seamless riding.
