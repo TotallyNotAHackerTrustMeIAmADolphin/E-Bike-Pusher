@@ -118,12 +118,13 @@ void setup()
   digitalWrite(pullupPowerPin, HIGH);
   pinMode(inductiveProbe, INPUT);
 
-  // Reset check for new PI variables
-  if (isnan(deviceInfo.vel_Kp) || isnan(deviceInfo.vel_Ki) || deviceInfo.home_ssid[0] == 255)
+  // Reset check for new PID variables
+  if (isnan(deviceInfo.vel_Kp) || isnan(deviceInfo.vel_Kd) || deviceInfo.home_ssid[0] == 255)
   {
-    deviceInfo.vel_Kp = 1.0;     // Instant punch
-    deviceInfo.vel_Ki = 2.0;     // Accel rate over time
-    deviceInfo.max_speed = 15.0; // Increased for geared hubs
+    deviceInfo.vel_Kp = 1.0;
+    deviceInfo.vel_Ki = 2.0;
+    deviceInfo.vel_Kd = 0.0; // Default D-term off
+    deviceInfo.max_speed = 10.0;
     deviceInfo.brakeTimeConstant = 1.0;
     strncpy(deviceInfo.home_ssid, "wlesswg", 31);
     strncpy(deviceInfo.home_pass, "hba.1245", 63);
@@ -172,7 +173,7 @@ void loop()
     cadenceSensor.clearNewDeviceFlag();
   }
 
-  // --- 50Hz PI VELOCITY CONTROLLER ---
+  // --- 50Hz FULL PID VELOCITY CONTROLLER ---
   if (millis() - last_cmd_time >= 20)
   {
     last_cmd_time = millis();
@@ -182,12 +183,13 @@ void loop()
     if (actual_velocity < 0.0f)
       actual_velocity = 0.0f;
 
-    // I_out tracks the built-up speed memory
+    // Persistent State Variables
     static float I_out = 0.0f;
+    static float prev_error = 0.0f;
 
     if (brake_avg < -0.5f)
     {
-      // --- ZONE 1: ACTIVE BRAKING ---
+      // --- ZONE 1: ACTIVE REGEN BRAKING ---
       isBraking = true;
       if (current_odrive_mode != 1)
       {
@@ -208,12 +210,13 @@ void loop()
         dashboard_target_val = 0.0f;
       }
 
-      // Crucial: Anchor the integrator so we resume pedaling cleanly!
+      // Keep Integrator and D-Term anchored so they don't violently jump when you resume pedaling
       I_out = actual_velocity;
+      prev_error = brake_avg;
     }
-    else if (cadenceSensor.getCadence() == 0 || brake_avg <= 0.1f)
+    else if (cadenceSensor.getCadence() == 0)
     {
-      // --- ZONE 2: COASTING & DEADBAND ---
+      // --- ZONE 2: COASTING (Not Pedaling) ---
       isBraking = false;
       if (current_odrive_mode != 1)
       {
@@ -222,12 +225,13 @@ void loop()
       }
 
       odrive.setTorque(0.0f);
-      I_out = actual_velocity; // Anchor the integrator
+      I_out = actual_velocity;
+      prev_error = brake_avg;
       dashboard_target_val = 0.0f;
     }
     else
     {
-      // --- ZONE 3: VELOCITY PI PUSH ---
+      // --- ZONE 3: PID VELOCITY PUSH (Pedaling) ---
       isBraking = false;
       if (current_odrive_mode != 2)
       {
@@ -235,22 +239,33 @@ void loop()
         current_odrive_mode = 2;
       }
 
-      // Map 0.1->1.0 to an error value of 0.0->1.0
-      float error = (brake_avg - 0.1f) / 0.9f;
+      // Target state is 0.0. Therefore, the Error IS the brake_avg!
+      float error = brake_avg;
+      float dt = 0.02f; // 20ms
 
-      // P-Term: Instant punch response!
+      // P-Term: Instant punch response
       float P_out = deviceInfo.vel_Kp * error;
 
-      // I-Term: Slow build-up acceleration!
-      I_out += (deviceInfo.vel_Ki * error) * 0.02f; // dt = 0.02s
+      // I-Term: Build-up acceleration
+      I_out += (deviceInfo.vel_Ki * error) * dt;
 
-      float target_velocity = I_out + P_out;
+      // D-Term: Damping/Shock Absorber
+      float derivative = (error - prev_error) / dt;
+      float D_out = deviceInfo.vel_Kd * derivative;
+      prev_error = error;
 
-      // Speed Limit clamp!
+      float target_velocity = I_out + P_out + D_out;
+
+      // Speed Limit anti-windup clamp!
       if (target_velocity > deviceInfo.max_speed)
       {
         target_velocity = deviceInfo.max_speed;
-        I_out = deviceInfo.max_speed; // Anti-windup
+        I_out = deviceInfo.max_speed;
+      }
+      else if (target_velocity < 0.0f)
+      {
+        target_velocity = 0.0f;
+        I_out = 0.0f;
       }
 
       odrive.setVelocity(target_velocity);
@@ -267,8 +282,6 @@ void loop()
   {
     last_dashboard_time = millis();
     float mech_power = abs((odrive.getCurrent() * 0.356) * (odrive.getVelocity() * 6.283185));
-
-    // Sends: Cadence, Power, Vbus, Amps, Brake Filter, Target (Torque or Vel), Actual Vel, Mode
     dash_sendTelemetry(cadenceSensor.getCadence(), mech_power, odrive.getVoltage(), odrive.getCurrent(), brake_avg, dashboard_target_val, odrive.getVelocity(), current_odrive_mode);
   }
 }

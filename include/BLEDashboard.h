@@ -3,24 +3,23 @@
 
 #include <Arduino.h>
 
-struct DeviceInfo
-{
+struct DeviceInfo {
   char macAddress[18];
   char deviceName[20];
   uint8_t addressType;
   bool SCAN_FOR_DEVICE;
-  float vel_Kp;    // NEW: Proportional Gain (Punch)
-  float vel_Ki;    // NEW: Integral Gain (Acceleration)
-  float max_speed; // NEW: Speed limit (rev/s)
-  float brakeTimeConstant;
+  float vel_Kp;             
+  float vel_Ki;             
+  float vel_Kd;             // NEW: Derivative Gain (Damping)
+  float max_speed;          
+  float brakeTimeConstant; 
   char home_ssid[32];
   char home_pass[64];
   bool maintenanceMode;
 };
 extern DeviceInfo deviceInfo;
 
-void addLog(const char *msg);
-
+void addLog(const char* msg);
 void dash_begin();
 void dash_loop();
 void dash_sendTelemetry(int cadence, float power, float vbus, float current, float brake_avg, float target_val, float actual_vel, int mode);

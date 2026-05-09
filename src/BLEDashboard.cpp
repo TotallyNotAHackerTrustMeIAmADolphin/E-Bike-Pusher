@@ -85,25 +85,27 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
       else if (rxValue == "GET")
       {
         char msg[200];
-        snprintf(msg, sizeof(msg), "{\"cfg\":1,\"kp\":%.2f,\"ki\":%.2f,\"ms\":%.2f,\"tc\":%.2f,\"s\":\"%s\"}",
-                 deviceInfo.vel_Kp, deviceInfo.vel_Ki, deviceInfo.max_speed,
-                 deviceInfo.brakeTimeConstant, deviceInfo.home_ssid);
+        snprintf(msg, sizeof(msg), "{\"cfg\":1,\"kp\":%.2f,\"ki\":%.2f,\"kd\":%.2f,\"ms\":%.2f,\"tc\":%.2f,\"s\":\"%s\"}",
+                 deviceInfo.vel_Kp, deviceInfo.vel_Ki, deviceInfo.vel_Kd,
+                 deviceInfo.max_speed, deviceInfo.brakeTimeConstant, deviceInfo.home_ssid);
         pTxCharacteristic->setValue((uint8_t *)msg, strlen(msg));
         pTxCharacteristic->notify();
       }
       else if (rxValue.startsWith("CFG:"))
       {
-        // Parse CFG:kp:ki:ms:tc
+        // Parse CFG:kp:ki:kd:ms:tc
         int s1 = rxValue.indexOf(':', 4);
         int s2 = rxValue.indexOf(':', s1 + 1);
         int s3 = rxValue.indexOf(':', s2 + 1);
+        int s4 = rxValue.indexOf(':', s3 + 1);
 
-        if (s1 > 0 && s2 > 0 && s3 > 0)
+        if (s1 > 0 && s2 > 0 && s3 > 0 && s4 > 0)
         {
           deviceInfo.vel_Kp = rxValue.substring(4, s1).toFloat();
           deviceInfo.vel_Ki = rxValue.substring(s1 + 1, s2).toFloat();
-          deviceInfo.max_speed = rxValue.substring(s2 + 1, s3).toFloat();
-          deviceInfo.brakeTimeConstant = rxValue.substring(s3 + 1).toFloat();
+          deviceInfo.vel_Kd = rxValue.substring(s2 + 1, s3).toFloat();
+          deviceInfo.max_speed = rxValue.substring(s3 + 1, s4).toFloat();
+          deviceInfo.brakeTimeConstant = rxValue.substring(s4 + 1).toFloat();
           addLog("Live Tuning Updated.");
         }
       }
