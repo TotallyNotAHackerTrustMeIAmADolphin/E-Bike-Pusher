@@ -1,12 +1,13 @@
 # 🚲 ESP-Cadence: E-Bike Autonomous Pusher-Trailer
 
-This project is a custom ESP32 firmware for an autonomous E-Bike "Pusher" Trailer. It uses a **Digital Inductive Hitch Sensor** and a **BLE Cadence Sensor** to control a 1000W Hub motor via an **ODrive Mini** motor controller over **CAN bus**.
+This project is a custom ESP32 firmware for an autonomous E-Bike "Pusher" Trailer. It uses a **Digital Inductive Hitch Sensor** and a **BLE Cadence Sensor** to control a 1000W Hub motor via an **MKS ODrive Mini V1** (ODrive v3.6 clone) running **v0.5.1 firmware** over **CAN bus**.
 
 ## 📌 Project Overview
 
 *   **Platform:** ESP32 (NodeMCU-32S)
 *   **Framework:** Arduino / PlatformIO
 *   **Core Logic:** 50Hz PID Velocity Controller that matches the trailer's speed to the bicycle by maintaining hitch equilibrium.
+*   **Hardware:** MKS ODrive Mini V1 (Use ODriveTool 0.5.x). *Warning: Official ODrive firmware may brick the MKS CAN transceiver.*
 *   **Communication:** 
     *   **CAN Bus (TWAI):** 250kbps to ODrive motor controller.
     *   **BLE:** NimBLE-based interface for Cadence Sensors and a WebBLE Dashboard.
@@ -30,7 +31,8 @@ This project is a custom ESP32 firmware for an autonomous E-Bike "Pusher" Traile
 ## 🧠 Software Architecture
 
 ### Key Components
-*   **`src/main.cpp`**: The heart of the system. Implements the 50Hz control loop, 3-zone state machine (Braking, Coasting, Pushing), and "Auto-Revive" logic for ODrive error recovery.
+*   **`src/main.cpp`**: The heart of the system. Implements the 50Hz control loop, 3-zone state machine (Braking, Coasting, Pushing), and robust error recovery logic.
+    *   **Inductive Sensor Logic:** The sensor is a digital open-collector type. It is read via `analogRead()` on GPIO 34 to handle marginal logic levels and provide software-based hysteresis for a smoother transition between states.
 *   **`ODriveCAN` (`include/ODriveCAN.h`)**: A lightweight wrapper for the ESP32 TWAI driver to communicate with ODrive v3.6/MKS ODrive Mini.
 *   **`CadenceSensor` (`include/CadenceSensor.h`)**: Manages the BLE connection to standard Cycling Speed and Cadence (CSC) sensors. Handles scanning, pairing, and RPM calculation.
 *   **`BLEDashboard` (`include/BLEDashboard.h`)**: Provides a Web Bluetooth interface for live PID tuning, telemetry streaming (2Hz), and system commands (OTA, Scan, Save).
@@ -49,5 +51,5 @@ This project is a custom ESP32 firmware for an autonomous E-Bike "Pusher" Traile
 ## ⚠️ Safety & Conventions
 
 *   **No WiFi while Riding**: WiFi is strictly disabled during normal operation to prevent interference with BLE and CAN (Radio Coexistence bug).
-*   **Watchdog Recovery**: The ESP32 monitors ODrive heartbeats and will automatically attempt to re-arm the motor if it disarms due to a watchdog timeout or transient error.
+*   **Watchdog Recovery**: The ESP32 monitors ODrive heartbeats and will automatically attempt to re-arm the motor if it disarms due to a watchdog timeout. Critical hardware errors (over-current, etc.) prevent auto-revive.
 *   **Regen Safety**: Regenerative braking is disabled below 0.05 rev/s to prevent the trailer from moving backward.

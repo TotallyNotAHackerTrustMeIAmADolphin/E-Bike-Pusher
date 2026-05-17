@@ -62,8 +62,30 @@ void triggerWiFiSave(String s, String p)
 
 void updateBrakeLogic()
 {
+  // NOTE: The inductive sensor is a digital open-collector type that pulls to GND.
+  // We use analogRead() because the voltage swing can be marginal/soft near the 
+  // ESP32 logic thresholds. Analog reading allows for custom hysteresis.
   int currentProbeAnalog = analogRead(inductiveProbe);
-  float target_state = (currentProbeAnalog < 2000) ? -1.0f : 1.0f;
+  static float target_state = 1.0f;
+
+  // Hysteresis: Prevents rapid toggling (chatter)
+  if (currentProbeAnalog < 1800)
+    target_state = -1.0f; // Compressed
+  else if (currentProbeAnalog > 2200)
+    target_state = 1.0f; // Extended
+
+  // Sensor Safety: Dead-man range check
+  if (currentProbeAnalog < 200 || currentProbeAnalog > 3900)
+  {
+    target_state = 0.0f; // Neutral (Safe)
+    static unsigned long last_error_log = 0;
+    if (millis() - last_error_log > 5000)
+    {
+      addLog("WARNING: Hitch Sensor Failure!");
+      last_error_log = millis();
+    }
+  }
+
   float dt = 0.02f;
   float tau = deviceInfo.brakeTimeConstant;
   if (tau < 0.01f)
@@ -118,12 +140,11 @@ void setup()
   digitalWrite(pullupPowerPin, HIGH);
   pinMode(inductiveProbe, INPUT);
 
-  // Reset check for new PID variables
   if (isnan(deviceInfo.vel_Kp) || isnan(deviceInfo.vel_Kd) || deviceInfo.home_ssid[0] == 255)
   {
     deviceInfo.vel_Kp = 1.0;
     deviceInfo.vel_Ki = 2.0;
-    deviceInfo.vel_Kd = 0.0; // Default D-term off
+    deviceInfo.vel_Kd = 0.0;
     deviceInfo.max_speed = 10.0;
     deviceInfo.brakeTimeConstant = 1.0;
     strncpy(deviceInfo.home_ssid, "wlesswg", 31);
@@ -174,38 +195,56 @@ void loop()
   }
 
   // --- 50Hz FULL PID VELOCITY CONTROLLER ---
+  static unsigned long last_loop_millis = 0;
   if (millis() - last_cmd_time >= 20)
   {
+    float dt = (millis() - last_loop_millis) / 1000.0f;
+    if (dt > 0.1f) dt = 0.02f;
+    last_loop_millis = millis();
     last_cmd_time = millis();
+
     updateBrakeLogic();
 
-    // =======================================================
-    // THE AUTO-REVIVE FIX!
-    // If the ODrive is not in Closed Loop (State 8), it dropped out.
-    // Every 2 seconds, we try to clear the watchdog error and re-arm it!
-    // =======================================================
+    // CAN Watchdog
+    bool canFresh = odrive.isDataFresh();
+
+    // ROBUST AUTO-REVIVE
     if (odrive.getState() != 8)
     {
+      uint32_t err = odrive.getError();
       static unsigned long last_revive_time = 0;
       if (millis() - last_revive_time > 2000)
       {
         last_revive_time = millis();
-        odrive.clearErrors();
-        delay(1);
-        odrive.setState(8);
-        addLog("ODrive Disarmed! Waking it back up...");
+        if (err == ODRV_ERROR_NONE || err == ODRV_ERROR_WATCHDOG_TIMER_EXPIRED)
+        {
+          odrive.clearErrors();
+          delay(1);
+          odrive.setState(8);
+          addLog("ODrive Watchdog Recovered. Re-arming...");
+        }
+        else
+        {
+          char msg[64];
+          snprintf(msg, sizeof(msg), "CRITICAL: ODrive Error 0x%04X!", err);
+          addLog(msg);
+        }
       }
     }
 
     float actual_velocity = odrive.getVelocity();
-    if (actual_velocity < 0.0f)
-      actual_velocity = 0.0f;
+    if (actual_velocity < 0.0f) actual_velocity = 0.0f;
 
-    // Persistent State Variables
     static float I_out = 0.0f;
     static float prev_error = 0.0f;
 
-    if (brake_avg < -0.5f)
+    if (!canFresh)
+    {
+      odrive.setTorque(0.0f);
+      I_out = actual_velocity;
+      dashboard_target_val = 0.0f;
+    }
+    else if (brake_avg < -0.5f)
     {
       // --- ZONE 1: ACTIVE REGEN BRAKING ---
       isBraking = true;
@@ -227,21 +266,18 @@ void loop()
         odrive.setTorque(0.0f);
         dashboard_target_val = 0.0f;
       }
-
-      // Keep Integrator and D-Term anchored so they don't violently jump when you resume pedaling
       I_out = actual_velocity;
       prev_error = brake_avg;
     }
     else if (cadenceSensor.getCadence() == 0)
     {
-      // --- ZONE 2: COASTING (Not Pedaling) ---
+      // --- ZONE 2: COASTING ---
       isBraking = false;
       if (current_odrive_mode != 1)
       {
         odrive.setMode(1, 1);
         current_odrive_mode = 1;
       }
-
       odrive.setTorque(0.0f);
       I_out = actual_velocity;
       prev_error = brake_avg;
@@ -249,32 +285,25 @@ void loop()
     }
     else
     {
-      // --- ZONE 3: PID VELOCITY PUSH (Pedaling) ---
+      // --- ZONE 3: PID VELOCITY PUSH ---
       isBraking = false;
       if (current_odrive_mode != 2)
       {
         odrive.setMode(2, 1);
         current_odrive_mode = 2;
+        // Anti-Surge
+        I_out = actual_velocity - (deviceInfo.vel_Kp * brake_avg);
       }
 
-      // Target state is 0.0. Therefore, the Error IS the brake_avg!
       float error = brake_avg;
-      float dt = 0.02f; // 20ms
-
-      // P-Term: Instant punch response
       float P_out = deviceInfo.vel_Kp * error;
-
-      // I-Term: Build-up acceleration
       I_out += (deviceInfo.vel_Ki * error) * dt;
-
-      // D-Term: Damping/Shock Absorber
       float derivative = (error - prev_error) / dt;
       float D_out = deviceInfo.vel_Kd * derivative;
       prev_error = error;
 
       float target_velocity = I_out + P_out + D_out;
 
-      // Speed Limit anti-windup clamp!
       if (target_velocity > deviceInfo.max_speed)
       {
         target_velocity = deviceInfo.max_speed;
@@ -295,7 +324,6 @@ void loop()
     odrive.requestData(CMD_GET_VBUS_VOLTAGE);
   }
 
-  // --- 2Hz DASHBOARD UPDATE ---
   if (millis() - last_dashboard_time >= 500)
   {
     last_dashboard_time = millis();

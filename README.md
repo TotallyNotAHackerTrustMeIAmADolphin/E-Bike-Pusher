@@ -15,8 +15,9 @@ The core firmware relies heavily on custom PID Control Theory to dynamically swi
 
 ### 1. Microcontroller: ESP32 (NodeMCU-32S / WROOM32D)
 *   **GPIO 17 (TX) & GPIO 16 (RX):** Connected to a 3.3V CAN Transceiver (e.g., SN65HVD230).
-*   **GPIO 34 (Input):** Inductive Brake Probe Signal. *(Reads `LOW` when the trailer pushes against the bike hitch).*
-*   **GPIO 33 (Output HIGH):** Acts as a dedicated 3.3V power bus. Connected to GPIO 34 via a physical **10kΩ Pull-Up Resistor** (Required because GPIO 34 lacks internal pull-up silicon).
+*   **GPIO 34 (Input):** Inductive Brake Probe Signal. 
+    *   *Logic:* Technically a digital open-collector sensor that pulls to GND. However, it is read via `analogRead()` because the voltage swing can be marginal near the ESP32's logic thresholds. Analog sampling allows for custom hysteresis and sensor health monitoring.
+*   **GPIO 33 (Output HIGH):** Acts as a dedicated 3.3V power bus. Connected to GPIO 34 via a physical **10kΩ Pull-Up Resistor**.
 
 ### 2. Motor Controller: MKS ODrive Mini V1.0
 *   **Hardware:** Clone of ODrive v3.6 (56V architecture).

@@ -1,6 +1,6 @@
 #include "ODriveCAN.h"
 
-ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0), odrv_state(1), odrv_error(0) {}
+ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0), odrv_state(1), odrv_error(0), last_heartbeat(0) {}
 
 bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin)
 {
@@ -78,9 +78,9 @@ void ODriveCAN::poll()
       }
       else if (cmd_id == CMD_HEARTBEAT)
       {
-        // THE FIX: Save the Heartbeat Status!
-        memcpy(&odrv_error, &msg.data[0], 4); // Bytes 0-3 are the Error Code
-        odrv_state = msg.data[4];             // Byte 4 is the Axis State
+        memcpy(&odrv_error, &msg.data[0], 4);
+        odrv_state = msg.data[4];
+        last_heartbeat = millis();
       }
     }
   }
@@ -119,4 +119,6 @@ float ODriveCAN::getVelocity() const { return odrv_vel; }
 float ODriveCAN::getCurrent() const { return odrv_current; }
 float ODriveCAN::getVoltage() const { return odrv_vbus; }
 float ODriveCAN::getBusCurrent() const { return odrv_ibus; }
-uint8_t ODriveCAN::getState() const { return odrv_state; } // NEW
+uint8_t ODriveCAN::getState() const { return odrv_state; }
+uint32_t ODriveCAN::getError() const { return odrv_error; }
+bool ODriveCAN::isDataFresh() const { return (millis() - last_heartbeat < 250); }
