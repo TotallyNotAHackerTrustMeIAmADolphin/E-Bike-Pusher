@@ -1,0 +1,1 @@
+gemini --resume a30a67e6-ccac-410d-9ad9-83bc5942d23c
