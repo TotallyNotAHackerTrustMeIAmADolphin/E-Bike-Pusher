@@ -31,9 +31,11 @@ This project is a custom ESP32 firmware for an autonomous E-Bike "Pusher" Traile
 ## 🧠 Software Architecture
 
 ### Key Components
-*   **`src/main.cpp`**: The heart of the system. Implements the 50Hz control loop, 3-zone state machine (Braking, Coasting, Pushing), and robust error recovery logic.
+*   **`src/main.cpp`**: The heart of the system.
+    *   **vControlTask (50Hz)**: A high-priority FreeRTOS task that handles the PID velocity controller, brake logic, and ODrive polling. This ensures deterministic timing independently of BLE or WiFi activity.
+    *   **Task Watchdog (TWDT)**: Monitors the `vControlTask`. If the loop hangs for >1s, the ESP32 performs a hard reset.
     *   **Inductive Sensor Logic:** The sensor is a digital open-collector type. It is read via `analogRead()` on GPIO 34 to handle marginal logic levels and provide software-based hysteresis for a smoother transition between states.
-*   **`ODriveCAN` (`include/ODriveCAN.h`)**: A lightweight wrapper for the ESP32 TWAI driver to communicate with ODrive v3.6/MKS ODrive Mini.
+*   **`ODriveCAN` (`include/ODriveCAN.h`)**: A lightweight wrapper for the ESP32 TWAI driver. Now features hardware-level acceptance filtering for the `ODRIVE_NODE_ID` to reduce CPU overhead.
 *   **`CadenceSensor` (`include/CadenceSensor.h`)**: Manages the BLE connection to standard Cycling Speed and Cadence (CSC) sensors. Handles scanning, pairing, and RPM calculation.
 *   **`BLEDashboard` (`include/BLEDashboard.h`)**: Provides a Web Bluetooth interface for live PID tuning, telemetry streaming (2Hz), and system commands (OTA, Scan, Save).
 
@@ -44,8 +46,8 @@ This project is a custom ESP32 firmware for an autonomous E-Bike "Pusher" Traile
 
 ## ⚙️ Configuration & Storage
 
-*   **EEPROM**: Settings are stored in a `DeviceInfo` struct starting at `EEPROM_ADDRESS = 0`. This includes PID gains (`Kp`, `Ki`, `Kd`), speed limits, and BLE/WiFi credentials.
-*   **Initial Setup**: The system resets to defaults if EEPROM is uninitialized.
+*   **Preferences (NVS)**: Settings are stored using the ESP32 `Preferences` library under the `"espcadence"` namespace. This provides robust, wear-leveled storage for PID gains (`Kp`, `Ki`, `Kd`), speed limits, and BLE/WiFi credentials.
+*   **Initial Setup**: The system resets to defaults if the NVS partition is empty or corrupted.
 *   **ODrive Config**: A virgin ODrive must be configured via `odrivetool` (see `README.md` for specific commands).
 
 ## ⚠️ Safety & Conventions
