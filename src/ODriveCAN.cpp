@@ -1,12 +1,19 @@
 #include "ODriveCAN.h"
 
-ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0), odrv_state(1), odrv_error(0), last_heartbeat(0) {}
+ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0), odrv_state(1), odrv_error(0), last_heartbeat(0), received_heartbeat(false) {}
 
 bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin)
 {
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(tx_pin, rx_pin, TWAI_MODE_NORMAL);
   twai_timing_config_t t_config = TWAI_TIMING_CONFIG_250KBITS();
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+  
+  // Hardware Filtering: Only accept messages for this ODrive Node ID
+  // Standard Frame (11-bit) filter layout: ID is bits 21-31.
+  // node_id is at ID bits 5-10.
+  twai_filter_config_t f_config;
+  f_config.acceptance_code = (node_id << 5) << 21;
+  f_config.acceptance_mask = ~((0x3F << 5) << 21); // 0x3F = 6 bits for node_id
+  f_config.single_filter = true;
 
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK)
   {
@@ -65,22 +72,23 @@ void ODriveCAN::poll()
     {
       if (cmd_id == CMD_GET_ENCODER_ESTIMATES)
       {
-        memcpy(&odrv_vel, &msg.data[4], 4);
+        memcpy((void *)&odrv_vel, &msg.data[4], 4);
       }
       else if (cmd_id == CMD_GET_IQC)
       {
-        memcpy(&odrv_current, &msg.data[4], 4);
+        memcpy((void *)&odrv_current, &msg.data[4], 4);
       }
       else if (cmd_id == CMD_GET_VBUS_VOLTAGE)
       {
-        memcpy(&odrv_vbus, &msg.data[0], 4);
-        memcpy(&odrv_ibus, &msg.data[4], 4);
+        memcpy((void *)&odrv_vbus, &msg.data[0], 4);
+        memcpy((void *)&odrv_ibus, &msg.data[4], 4);
       }
       else if (cmd_id == CMD_HEARTBEAT)
       {
-        memcpy(&odrv_error, &msg.data[0], 4);
+        memcpy((void *)&odrv_error, &msg.data[0], 4);
         odrv_state = msg.data[4];
         last_heartbeat = millis();
+        received_heartbeat = true;
       }
     }
   }
@@ -121,4 +129,4 @@ float ODriveCAN::getVoltage() const { return odrv_vbus; }
 float ODriveCAN::getBusCurrent() const { return odrv_ibus; }
 uint8_t ODriveCAN::getState() const { return odrv_state; }
 uint32_t ODriveCAN::getError() const { return odrv_error; }
-bool ODriveCAN::isDataFresh() const { return (millis() - last_heartbeat < 250); }
+bool ODriveCAN::isDataFresh() const { return received_heartbeat && (millis() - last_heartbeat < 250); }

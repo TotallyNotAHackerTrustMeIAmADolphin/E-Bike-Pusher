@@ -101,11 +101,19 @@ class MyRxCallbacks : public NimBLECharacteristicCallbacks
 
         if (s1 > 0 && s2 > 0 && s3 > 0 && s4 > 0)
         {
-          deviceInfo.vel_Kp = rxValue.substring(4, s1).toFloat();
-          deviceInfo.vel_Ki = rxValue.substring(s1 + 1, s2).toFloat();
-          deviceInfo.vel_Kd = rxValue.substring(s2 + 1, s3).toFloat();
-          deviceInfo.max_speed = rxValue.substring(s3 + 1, s4).toFloat();
-          deviceInfo.brakeTimeConstant = rxValue.substring(s4 + 1).toFloat();
+          float kp = rxValue.substring(4, s1).toFloat();
+          float ki = rxValue.substring(s1 + 1, s2).toFloat();
+          float kd = rxValue.substring(s2 + 1, s3).toFloat();
+          float ms = rxValue.substring(s3 + 1, s4).toFloat();
+          float tc = rxValue.substring(s4 + 1).toFloat();
+
+          taskENTER_CRITICAL(&deviceInfoMux);
+          deviceInfo.vel_Kp = kp;
+          deviceInfo.vel_Ki = ki;
+          deviceInfo.vel_Kd = kd;
+          deviceInfo.max_speed = ms;
+          deviceInfo.brakeTimeConstant = tc;
+          taskEXIT_CRITICAL(&deviceInfoMux);
           addLog("Live Tuning Updated.");
         }
       }
