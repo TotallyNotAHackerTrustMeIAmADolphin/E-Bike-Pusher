@@ -24,7 +24,6 @@ volatile int current_odrive_mode = 2;
 volatile bool isBraking = false;
 volatile bool isUpdating = false;
 
-unsigned long last_cmd_time = 0;
 unsigned long last_dashboard_time = 0;
 
 void triggerEEPROMSave()
@@ -336,11 +335,7 @@ void setup()
   });
 
   // --- RTOS & Watchdog Initialization ---
-  esp_task_wdt_config_t twdt_config = {
-      .timeout_ms = 1000,
-      .idle_core_mask = 0,
-      .trigger_panic = true};
-  esp_task_wdt_init(&twdt_config);
+  esp_task_wdt_init(1000, true); // 1000ms timeout, panic (reboot) on expiry
   xTaskCreatePinnedToCore(vControlTask, "ControlTask", 4096, NULL, 3, NULL, 1);
 }
 
