@@ -6,7 +6,14 @@ bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin)
 {
   twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(tx_pin, rx_pin, TWAI_MODE_NORMAL);
   twai_timing_config_t t_config = TWAI_TIMING_CONFIG_250KBITS();
-  twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+  
+  // Hardware Filtering: Only accept messages for this ODrive Node ID
+  // Standard Frame (11-bit) filter layout: ID is bits 21-31.
+  // node_id is at ID bits 5-10.
+  twai_filter_config_t f_config;
+  f_config.acceptance_code = (node_id << 5) << 21;
+  f_config.acceptance_mask = ~((0x3F << 5) << 21); // 0x3F = 6 bits for node_id
+  f_config.single_filter = true;
 
   if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK)
   {
