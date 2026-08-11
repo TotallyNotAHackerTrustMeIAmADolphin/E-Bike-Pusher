@@ -18,6 +18,9 @@ struct DeviceInfo {
   bool maintenanceMode;
 };
 extern DeviceInfo deviceInfo;
+// Guards multi-field reads/writes of deviceInfo's PID/tuning fields so vControlTask
+// never sees a torn mix of old/new values while a BLE CFG: write is in progress.
+extern portMUX_TYPE deviceInfoMux;
 
 void addLog(const char* msg);
 void dash_begin();

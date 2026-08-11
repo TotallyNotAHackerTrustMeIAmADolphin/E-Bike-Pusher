@@ -72,20 +72,20 @@ void ODriveCAN::poll()
     {
       if (cmd_id == CMD_GET_ENCODER_ESTIMATES)
       {
-        memcpy(&odrv_vel, &msg.data[4], 4);
+        memcpy((void *)&odrv_vel, &msg.data[4], 4);
       }
       else if (cmd_id == CMD_GET_IQC)
       {
-        memcpy(&odrv_current, &msg.data[4], 4);
+        memcpy((void *)&odrv_current, &msg.data[4], 4);
       }
       else if (cmd_id == CMD_GET_VBUS_VOLTAGE)
       {
-        memcpy(&odrv_vbus, &msg.data[0], 4);
-        memcpy(&odrv_ibus, &msg.data[4], 4);
+        memcpy((void *)&odrv_vbus, &msg.data[0], 4);
+        memcpy((void *)&odrv_ibus, &msg.data[4], 4);
       }
       else if (cmd_id == CMD_HEARTBEAT)
       {
-        memcpy(&odrv_error, &msg.data[0], 4);
+        memcpy((void *)&odrv_error, &msg.data[0], 4);
         odrv_state = msg.data[4];
         last_heartbeat = millis();
         received_heartbeat = true;

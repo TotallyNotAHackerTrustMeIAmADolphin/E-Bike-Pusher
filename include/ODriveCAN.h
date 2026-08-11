@@ -40,14 +40,17 @@ class ODriveCAN
 {
 private:
   uint8_t node_id;
-  float odrv_vel;
-  float odrv_current;
-  float odrv_vbus;
-  float odrv_ibus;
-  uint8_t odrv_state;
-  uint32_t odrv_error;
-  unsigned long last_heartbeat; // NEW: Timestamp of last heartbeat
-  bool received_heartbeat;      // NEW: true once at least one heartbeat has arrived
+  // poll() now runs on vControlTask while the getters below are also read from
+  // loop() (dashboard telemetry) on a different task; volatile keeps these
+  // cross-task reads/writes from being cached or reordered away.
+  volatile float odrv_vel;
+  volatile float odrv_current;
+  volatile float odrv_vbus;
+  volatile float odrv_ibus;
+  volatile uint8_t odrv_state;
+  volatile uint32_t odrv_error;
+  volatile unsigned long last_heartbeat; // NEW: Timestamp of last heartbeat
+  volatile bool received_heartbeat;      // NEW: true once at least one heartbeat has arrived
 
   void twai_send(uint32_t cmd_id, uint8_t *data, uint8_t len);
 

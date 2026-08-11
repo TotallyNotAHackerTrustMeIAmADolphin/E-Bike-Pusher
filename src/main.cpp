@@ -12,6 +12,7 @@ ODriveCAN odrive(0);
 CadenceSensor cadenceSensor;
 DeviceInfo deviceInfo;
 Preferences preferences;
+portMUX_TYPE deviceInfoMux = portMUX_INITIALIZER_UNLOCKED;
 
 #define CAN_TX_PIN GPIO_NUM_17
 #define CAN_RX_PIN GPIO_NUM_16
@@ -59,7 +60,7 @@ void triggerWiFiSave(String s, String p)
   ESP.restart();
 }
 
-void updateBrakeLogic(float dt)
+void updateBrakeLogic(float dt, float tau)
 {
   // NOTE: The inductive sensor is a digital open-collector type that pulls to GND.
   // We use analogRead() because the voltage swing can be marginal/soft near the 
@@ -85,7 +86,6 @@ void updateBrakeLogic(float dt)
     }
   }
 
-  float tau = deviceInfo.brakeTimeConstant;
   if (tau < 0.01f)
     tau = 0.01f;
   float alpha = dt / (tau + dt);
@@ -128,6 +128,15 @@ void runMaintenanceMode()
   }
 }
 
+static void ensureTorqueControlMode()
+{
+  if (current_odrive_mode != 1)
+  {
+    odrive.setMode(1, 1);
+    current_odrive_mode = 1;
+  }
+}
+
 void vControlTask(void *pvParameters)
 {
   TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -150,8 +159,19 @@ void vControlTask(void *pvParameters)
 
     const float dt = 0.020f; // Fixed 50Hz delta (guaranteed by vTaskDelayUntil)
 
+    // Snapshot the BLE-tunable PID/filter gains together so a concurrent CFG:
+    // write from the dashboard can't hand us a torn mix of old/new values.
+    float kp, ki, kd, maxSpeed, tau;
+    taskENTER_CRITICAL(&deviceInfoMux);
+    kp = deviceInfo.vel_Kp;
+    ki = deviceInfo.vel_Ki;
+    kd = deviceInfo.vel_Kd;
+    maxSpeed = deviceInfo.max_speed;
+    tau = deviceInfo.brakeTimeConstant;
+    taskEXIT_CRITICAL(&deviceInfoMux);
+
     odrive.poll();
-    updateBrakeLogic(dt);
+    updateBrakeLogic(dt, tau);
 
     bool canFresh = odrive.isDataFresh();
 
@@ -186,11 +206,7 @@ void vControlTask(void *pvParameters)
     {
       // Force Torque Control with 0A (same safe freewheel state as Zone 2) so a
       // stale Velocity Control command can't keep driving the motor.
-      if (current_odrive_mode != 1)
-      {
-        odrive.setMode(1, 1);
-        current_odrive_mode = 1;
-      }
+      ensureTorqueControlMode();
       odrive.setTorque(0.0f);
       I_out = actual_velocity;
       prev_error = brake_avg;
@@ -200,11 +216,7 @@ void vControlTask(void *pvParameters)
     {
       // --- ZONE 1: ACTIVE REGEN BRAKING ---
       isBraking = true;
-      if (current_odrive_mode != 1)
-      {
-        odrive.setMode(1, 1);
-        current_odrive_mode = 1;
-      }
+      ensureTorqueControlMode();
 
       if (actual_velocity > 0.05f)
       {
@@ -225,11 +237,7 @@ void vControlTask(void *pvParameters)
     {
       // --- ZONE 2: COASTING ---
       isBraking = false;
-      if (current_odrive_mode != 1)
-      {
-        odrive.setMode(1, 1);
-        current_odrive_mode = 1;
-      }
+      ensureTorqueControlMode();
       odrive.setTorque(0.0f);
       I_out = actual_velocity;
       prev_error = brake_avg;
@@ -243,23 +251,23 @@ void vControlTask(void *pvParameters)
       {
         odrive.setMode(2, 1);
         current_odrive_mode = 2;
-        I_out = actual_velocity - (deviceInfo.vel_Kp * brake_avg);
+        I_out = actual_velocity - (kp * brake_avg);
         prev_error = brake_avg;
       }
 
       float error = brake_avg;
-      float P_out = deviceInfo.vel_Kp * error;
-      I_out += (deviceInfo.vel_Ki * error) * dt;
+      float P_out = kp * error;
+      I_out += (ki * error) * dt;
       float derivative = (error - prev_error) / dt;
-      float D_out = deviceInfo.vel_Kd * derivative;
+      float D_out = kd * derivative;
       prev_error = error;
 
       float target_velocity = I_out + P_out + D_out;
 
-      if (target_velocity > deviceInfo.max_speed)
+      if (target_velocity > maxSpeed)
       {
-        target_velocity = deviceInfo.max_speed;
-        I_out = deviceInfo.max_speed;
+        target_velocity = maxSpeed;
+        I_out = maxSpeed;
       }
       else if (target_velocity < 0.0f)
       {
@@ -335,8 +343,22 @@ void setup()
   });
 
   // --- RTOS & Watchdog Initialization ---
-  esp_task_wdt_init(1000, true); // 1000ms timeout, panic (reboot) on expiry
-  xTaskCreatePinnedToCore(vControlTask, "ControlTask", 4096, NULL, 3, NULL, 1);
+  // Deliberately NOT calling esp_task_wdt_init() here: this build's sdkconfig
+  // already brings up the shared Task Watchdog Timer at boot (5s, panic-enabled),
+  // and CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y means the core-0 idle task is
+  // already subscribed to it. Re-calling esp_task_wdt_init() with a shorter
+  // timeout would tighten that SHARED timeout for every subscriber, not just
+  // vControlTask, risking a spurious panic/reboot from an unrelated core-0 stall
+  // (BLE stack work, flash writes, OTA polling) that used to have 5s of slack.
+  // vControlTask still gets fast-panic protection by subscribing to the existing
+  // watchdog via esp_task_wdt_add() below.
+  BaseType_t controlTaskCreated = xTaskCreatePinnedToCore(vControlTask, "ControlTask", 4096, NULL, 3, NULL, 1);
+  if (controlTaskCreated != pdPASS)
+  {
+    addLog("CRITICAL: Failed to create control task! Rebooting...");
+    delay(100);
+    ESP.restart();
+  }
 }
 
 void loop()
