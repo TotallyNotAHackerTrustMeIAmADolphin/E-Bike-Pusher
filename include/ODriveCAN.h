@@ -47,6 +47,7 @@ private:
   uint8_t odrv_state;
   uint32_t odrv_error;
   unsigned long last_heartbeat; // NEW: Timestamp of last heartbeat
+  bool received_heartbeat;      // NEW: true once at least one heartbeat has arrived
 
   void twai_send(uint32_t cmd_id, uint8_t *data, uint8_t len);
 

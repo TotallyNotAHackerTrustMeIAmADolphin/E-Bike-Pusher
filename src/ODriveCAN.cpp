@@ -1,6 +1,6 @@
 #include "ODriveCAN.h"
 
-ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0), odrv_state(1), odrv_error(0), last_heartbeat(0) {}
+ODriveCAN::ODriveCAN(uint8_t node) : node_id(node), odrv_vel(0.0), odrv_current(0.0), odrv_vbus(0.0), odrv_ibus(0.0), odrv_state(1), odrv_error(0), last_heartbeat(0), received_heartbeat(false) {}
 
 bool ODriveCAN::begin(gpio_num_t tx_pin, gpio_num_t rx_pin)
 {
@@ -81,6 +81,7 @@ void ODriveCAN::poll()
         memcpy(&odrv_error, &msg.data[0], 4);
         odrv_state = msg.data[4];
         last_heartbeat = millis();
+        received_heartbeat = true;
       }
     }
   }
@@ -121,4 +122,4 @@ float ODriveCAN::getVoltage() const { return odrv_vbus; }
 float ODriveCAN::getBusCurrent() const { return odrv_ibus; }
 uint8_t ODriveCAN::getState() const { return odrv_state; }
 uint32_t ODriveCAN::getError() const { return odrv_error; }
-bool ODriveCAN::isDataFresh() const { return (millis() - last_heartbeat < 250); }
+bool ODriveCAN::isDataFresh() const { return received_heartbeat && (millis() - last_heartbeat < 250); }

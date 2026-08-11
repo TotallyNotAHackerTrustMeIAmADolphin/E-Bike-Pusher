@@ -60,7 +60,7 @@ void triggerWiFiSave(String s, String p)
   ESP.restart();
 }
 
-void updateBrakeLogic()
+void updateBrakeLogic(float dt)
 {
   // NOTE: The inductive sensor is a digital open-collector type that pulls to GND.
   // We use analogRead() because the voltage swing can be marginal/soft near the 
@@ -86,7 +86,6 @@ void updateBrakeLogic()
     }
   }
 
-  float dt = 0.02f;
   float tau = deviceInfo.brakeTimeConstant;
   if (tau < 0.01f)
     tau = 0.01f;
@@ -203,7 +202,7 @@ void loop()
     last_loop_millis = millis();
     last_cmd_time = millis();
 
-    updateBrakeLogic();
+    updateBrakeLogic(dt);
 
     // CAN Watchdog
     bool canFresh = odrive.isDataFresh();
@@ -240,8 +239,16 @@ void loop()
 
     if (!canFresh)
     {
+      // Force Torque Control with 0A (same safe freewheel state as Zone 2) so a
+      // stale Velocity Control command can't keep driving the motor.
+      if (current_odrive_mode != 1)
+      {
+        odrive.setMode(1, 1);
+        current_odrive_mode = 1;
+      }
       odrive.setTorque(0.0f);
       I_out = actual_velocity;
+      prev_error = brake_avg;
       dashboard_target_val = 0.0f;
     }
     else if (brake_avg < -0.5f)
@@ -293,6 +300,7 @@ void loop()
         current_odrive_mode = 2;
         // Anti-Surge
         I_out = actual_velocity - (deviceInfo.vel_Kp * brake_avg);
+        prev_error = brake_avg;
       }
 
       float error = brake_avg;
